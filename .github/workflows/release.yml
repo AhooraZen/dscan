@@ -213,17 +213,30 @@ jobs:
           cargo tauri android init
           cargo tauri android build --apk --target aarch64 --target armv7
           cd ../../..
-          find crates/dscan-gui -name "*aarch64*.apk" -o -name "*arm64*.apk" | head -n 1 | xargs -I {} cp {} ./dscan-gui-android-arm64-v8a.apk || true
-          find crates/dscan-gui -name "*armv7*.apk" -o -name "*armeabi*.apk" | head -n 1 | xargs -I {} cp {} ./dscan-gui-android-armeabi-v7a.apk || true
-          find crates/dscan-gui -name "*.apk" -exec cp {} ./ \; || true
-          ls -lh *.apk || true
+
+      - name: Align and Sign Android APK
+        run: |
+          keytool -genkeypair -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          ZIPALIGN="$ANDROID_HOME/build-tools/34.0.0/zipalign"
+          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+
+          mkdir -p signed-apks
+          for apk in $(find crates/dscan-gui/src-tauri/gen/android -name "*.apk"); do
+            echo "Processing $apk..."
+            base=$(basename "$apk" .apk)
+            $ZIPALIGN -v -p 4 "$apk" "signed-apks/${base}-aligned.apk"
+            $APKSIGNER sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android "signed-apks/${base}-aligned.apk"
+            $APKSIGNER verify "signed-apks/${base}-aligned.apk"
+          done
+
+          cp signed-apks/*-aligned.apk ./dscan-gui-android-universal.apk
+          ls -lh *.apk
 
       - name: Upload Android APKs
-        if: hashFiles('*.apk') != ''
         uses: actions/upload-artifact@v4
         with:
           name: android-apks
-          path: "*.apk"
+          path: dscan-gui-android-universal.apk
 
   publish-github-release:
     name: Publish GitHub Release
