@@ -100,6 +100,8 @@ pub struct ScanConfig {
     pub max_depth: usize,
     pub top_limit: usize,
     pub threads: usize,
+    pub follow_symlinks: bool,
+    pub cross_filesystems: bool,
 }
 
 pub struct GlobalState {
@@ -212,6 +214,25 @@ fn scan_directory_tree(
     path_stack.extend_from_slice(dir_bytes);
 
     if let Some(fd) = open_dir(dir_path) {
+        if !state.config.cross_filesystems {
+            let mut stx = crate::sys::Statx::default();
+            let empty_path = b"\0";
+            let ret = crate::sys::sys_statx(
+                fd,
+                empty_path.as_ptr() as *const std::ffi::c_char,
+                crate::sys::AT_EMPTY_PATH | crate::sys::AT_STATX_DONT_SYNC,
+                crate::sys::STATX_TYPE,
+                &mut stx,
+            );
+            if ret == 0 {
+                let dev = crate::sys::makedev(stx.stx_dev_major, stx.stx_dev_minor);
+                if dev != root_dev {
+                    unsafe { crate::sys::close(fd) };
+                    return;
+                }
+            }
+        }
+
         let buf_slice = buffer.as_mut_slice();
         loop {
             // SAFETY: fd is valid open directory descriptor, buffer is a valid aligned slice.
@@ -297,8 +318,55 @@ fn scan_directory_tree(
                             &mut stx,
                         );
                         if res == 0 {
-                            let dev = crate::sys::makedev(stx.stx_dev_major, stx.stx_dev_minor);
-                            if dev == root_dev {
+                            let sz = stx.stx_blocks * 512;
+                            local_dir_size += sz;
+                            *local_files += 1;
+                            *local_bytes += sz;
+
+                            if *local_files >= 1024 {
+                                state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
+                                state.total_files.fetch_add(*local_files, Ordering::Relaxed);
+                                *local_bytes = 0;
+                                *local_files = 0;
+                            }
+
+                            push_top_file(local_top_files, top_limit, sz, || {
+                                if path_stack.is_empty() {
+                                    PathBuf::from(".")
+                                } else {
+                                    PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
+                                }
+                            });
+                        }
+                    }
+                    DT_UNKNOWN | DT_LNK => {
+                        let flags = if state.config.follow_symlinks {
+                            AT_STATX_DONT_SYNC
+                        } else {
+                            AT_SYMLINK_NOFOLLOW | AT_STATX_DONT_SYNC
+                        };
+                        let mut stx = crate::sys::Statx::default();
+                        let res = crate::sys::sys_statx(
+                            fd,
+                            name_cstr.as_ptr(),
+                            flags,
+                            STATX_TYPE | STATX_BLOCKS,
+                            &mut stx,
+                        );
+                        if res == 0 {
+                            let mode = stx.stx_mode;
+                            let file_type = mode & S_IFMT;
+                            if file_type == S_IFDIR {
+                                let dev = crate::sys::makedev(stx.stx_dev_major, stx.stx_dev_minor);
+                                if state.config.cross_filesystems || dev == root_dev {
+                                    let child_path = if path_stack.is_empty() {
+                                        PathBuf::from(".")
+                                    } else {
+                                        PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
+                                    };
+                                    sub_dirs.push(child_path);
+                                }
+                            } else if file_type == S_IFREG {
                                 let sz = stx.stx_blocks * 512;
                                 local_dir_size += sz;
                                 *local_files += 1;
@@ -318,56 +386,6 @@ fn scan_directory_tree(
                                         PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
                                     }
                                 });
-                            }
-                        }
-                    }
-                    DT_UNKNOWN | DT_LNK => {
-                        // SLOW PATH: Symlink or unknown filesystem. Query STATX_TYPE | STATX_BLOCKS.
-                        let mut stx = crate::sys::Statx::default();
-                        let res = crate::sys::sys_statx(
-                            fd,
-                            name_cstr.as_ptr(),
-                            AT_SYMLINK_NOFOLLOW | AT_STATX_DONT_SYNC,
-                            STATX_TYPE | STATX_BLOCKS,
-                            &mut stx,
-                        );
-                        if res == 0 {
-                            let mode = stx.stx_mode;
-                            let file_type = mode & S_IFMT;
-                            if file_type == S_IFDIR {
-                                let child_path = if path_stack.is_empty() {
-                                    PathBuf::from(".")
-                                } else {
-                                    PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
-                                };
-                                sub_dirs.push(child_path);
-                            } else if file_type == S_IFREG {
-                                let dev = crate::sys::makedev(stx.stx_dev_major, stx.stx_dev_minor);
-                                if dev == root_dev {
-                                    let sz = stx.stx_blocks * 512;
-                                    local_dir_size += sz;
-                                    *local_files += 1;
-                                    *local_bytes += sz;
-
-                                    if *local_files >= 1024 {
-                                        state
-                                            .total_bytes
-                                            .fetch_add(*local_bytes, Ordering::Relaxed);
-                                        state
-                                            .total_files
-                                            .fetch_add(*local_files, Ordering::Relaxed);
-                                        *local_bytes = 0;
-                                        *local_files = 0;
-                                    }
-
-                                    push_top_file(local_top_files, top_limit, sz, || {
-                                        if path_stack.is_empty() {
-                                            PathBuf::from(".")
-                                        } else {
-                                            PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
-                                        }
-                                    });
-                                }
                             }
                         }
                     }
@@ -576,6 +594,8 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
             max_depth: options.max_depth,
             top_limit: options.top_limit,
             threads: num_threads,
+            follow_symlinks: options.follow_symlinks,
+            cross_filesystems: options.cross_filesystems,
         },
         stealers,
         active_workers: CachePadded(AtomicUsize::new(1)),
@@ -661,7 +681,11 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
             continue;
         }
         let mut curr: &Path = dir;
+        let mut hit_root = false;
         loop {
+            if curr == root {
+                hit_root = true;
+            }
             let cur_depth = curr.components().count();
             if cur_depth < base_depth {
                 break;
@@ -671,9 +695,12 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
                 *final_dirs.entry(curr.to_path_buf()).or_insert(0) += *direct_sz;
             }
             match curr.parent() {
-                Some(p) => curr = p,
-                None => break,
+                Some(p) if !p.as_os_str().is_empty() => curr = p,
+                _ => break,
             }
+        }
+        if !hit_root {
+            *final_dirs.entry(root.to_path_buf()).or_insert(0) += *direct_sz;
         }
     }
 
@@ -796,6 +823,8 @@ mod tests {
             max_depth: 3,
             threads: 4,
             excludes: vec![],
+            follow_symlinks: false,
+            cross_filesystems: false,
         };
 
         let result = run_scan(&options).expect("run_scan failed");

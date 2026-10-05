@@ -61,6 +61,7 @@ pub const DT_LNK: u8 = 10;
 
 pub const AT_SYMLINK_NOFOLLOW: i32 = 0x100;
 pub const AT_STATX_DONT_SYNC: i32 = 0x4000;
+pub const AT_EMPTY_PATH: i32 = 0x1000;
 
 pub const STATX_TYPE: u32 = 0x00000001;
 pub const STATX_MODE: u32 = 0x00000002;

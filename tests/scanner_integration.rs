@@ -28,6 +28,8 @@ fn test_synthetic_tree_matches_du() {
         max_depth: 4,
         threads: 8,
         excludes: vec![],
+        follow_symlinks: false,
+        cross_filesystems: false,
     };
 
     let result = run_scan(&options).expect("run_scan failed");
@@ -115,12 +117,59 @@ fn test_multi_threaded_scalability() {
             max_depth: 2,
             threads,
             excludes: vec![],
+            follow_symlinks: false,
+            cross_filesystems: false,
         };
 
         let result = run_scan(&options).expect("run_scan failed");
         assert_eq!(result.total_files, 160);
         assert!(result.total_bytes >= 160 * 4096);
     }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_symlink_directory_traversal() {
+    let temp_dir = std::env::temp_dir().join(format!("dscan_symlink_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    let real_dir = temp_dir.join("real_dir");
+    fs::create_dir_all(&real_dir).unwrap();
+    fs::write(real_dir.join("payload.bin"), vec![0x99u8; 8192]).unwrap();
+
+    let scan_root = temp_dir.join("scan_root");
+    fs::create_dir_all(&scan_root).unwrap();
+    fs::write(scan_root.join("root.txt"), "hello").unwrap();
+
+    // Symlink inside scan_root pointing to real_dir (analogous to ~/storage in Termux)
+    let _ = symlink(&real_dir, scan_root.join("link_to_real"));
+
+    // 1. Without follow_symlinks: only root.txt is counted
+    let options_no_follow = CliOptions {
+        target_path: scan_root.to_str().unwrap().to_string(),
+        top_limit: 10,
+        max_depth: usize::MAX,
+        threads: 2,
+        excludes: vec![],
+        follow_symlinks: false,
+        cross_filesystems: false,
+    };
+    let res_no_follow = run_scan(&options_no_follow).expect("scan should succeed");
+    assert_eq!(res_no_follow.total_files, 1);
+
+    // 2. With follow_symlinks: payload.bin inside symlinked directory is reached and counted
+    let options_follow = CliOptions {
+        target_path: scan_root.to_str().unwrap().to_string(),
+        top_limit: 10,
+        max_depth: usize::MAX,
+        threads: 2,
+        excludes: vec![],
+        follow_symlinks: true,
+        cross_filesystems: true,
+    };
+    let res_follow = run_scan(&options_follow).expect("scan should succeed");
+    assert_eq!(res_follow.total_files, 2);
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
