@@ -2,7 +2,7 @@
 name = "dscan"
 version = "0.2.0"
 edition = "2024"
-authors = ["Ahoura <ahoura@parchlinux.com>"]
+authors = ["AhooraZen <ahoora935137@gmail.com>"]
 description = "Fast, zero-dependency multi-threaded disk usage analyzer for Linux"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
