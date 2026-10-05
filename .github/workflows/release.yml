@@ -1,0 +1,185 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-cli:
+    name: Build CLI (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin_name: dscan
+            asset_name: dscan-linux-x86_64.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin_name: dscan.exe
+            asset_name: dscan-windows-x64.zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build dscan-cli
+        run: cargo build --release -p dscan --target ${{ matrix.target }}
+
+      - name: Package Linux artifact
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf ../../../${{ matrix.asset_name }} ${{ matrix.bin_name }}
+          cd ../../..
+
+      - name: Package Windows artifact
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.bin_name }} -DestinationPath ${{ matrix.asset_name }}
+
+      - name: Upload CLI Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+
+  build-desktop-gui:
+    name: Build Desktop GUI (Linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (WebKitGTK, GLib, etc.)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libjavascriptcoregtk-4.1-dev
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build frontend
+        run: |
+          cd crates/dscan-gui/ui
+          bun install
+          bun run build
+          cd ../../..
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Tauri GUI
+        run: |
+          cargo build --release -p dscan-gui
+          mkdir -p release-gui
+          cp target/release/dscan-gui release-gui/
+          tar -czvf dscan-gui-linux-x86_64.tar.gz -C release-gui dscan-gui
+
+      - name: Upload GUI Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dscan-gui-linux-x86_64.tar.gz
+          path: dscan-gui-linux-x86_64.tar.gz
+
+  build-android-gui:
+    name: Build Android GUI (APK)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android Build Tools and NDK
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build frontend
+        run: |
+          cd crates/dscan-gui/ui
+          bun install
+          bun run build
+          cd ../../..
+
+      - name: Install Rust toolchain & Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2.0.0" --locked
+
+      - name: Init & Build Tauri Android
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+        run: |
+          cd crates/dscan-gui/src-tauri
+          cargo tauri android init
+          cargo tauri android build --apk --target aarch64
+          cd ../../..
+          find crates/dscan-gui -name "*.apk" -exec cp {} ./dscan-gui-android-arm64.apk \; || true
+
+      - name: Upload Android APK
+        if: hashFiles('dscan-gui-android-arm64.apk') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: dscan-gui-android-arm64.apk
+          path: dscan-gui-android-arm64.apk
+
+  publish-github-release:
+    name: Publish GitHub Release
+    needs: [build-cli, build-desktop-gui, build-android-gui]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Flatten release artifacts
+        run: |
+          mkdir -p dist-release
+          find release-artifacts -type f -exec cp {} dist-release/ \;
+          ls -la dist-release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,10 +1,12 @@
 [package]
 name = "dscan-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["AhooraZen <ahoora935137@gmail.com>"]
 description = "High-throughput kernel directory traversal and disk space accounting engine"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/parchlinux/dscan"
+readme = "../../README.md"
 
 [lib]
 name = "dscan_core"
