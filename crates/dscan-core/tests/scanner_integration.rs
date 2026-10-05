@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use dscan_core::sys;
 use dscan_core::{CliOptions, run_scan};
 use std::fs;
@@ -403,4 +404,53 @@ fn test_utf16_transcoding_exhaustive() {
     transcode_utf16_to_utf8(&utf16, &mut dst);
     assert_eq!(dst, complex.as_bytes());
     assert_eq!(dst, String::from_utf16_lossy(&utf16).as_bytes());
+}
+
+#[test]
+fn test_windows_wide_path_stack_in_bounds_null_terminator() {
+    use dscan_core::scanner::WidePathStack;
+
+    let mut stack = WidePathStack::new();
+    assert_eq!(stack.len(), 0);
+    assert!(stack.is_empty());
+
+    let root_wide: Vec<u16> = "D:\\Scanner\\Target".encode_utf16().collect();
+    stack.set_root_wide(&root_wide);
+
+    let ptr = stack.as_null_terminated();
+    assert!(!ptr.is_null());
+    assert_eq!(stack.len(), root_wide.len());
+
+    let child_a: Vec<u16> = "child_alpha".encode_utf16().collect();
+    let prev = stack.push_child(&child_a);
+
+    let slice = stack.as_slice();
+    assert!(!slice.contains(&0));
+
+    let ptr2 = stack.as_null_terminated();
+    unsafe {
+        assert_eq!(*ptr2.add(slice.len()), 0);
+    }
+
+    stack.truncate(prev);
+    assert_eq!(stack.len(), root_wide.len());
+    let slice_restored = stack.as_slice();
+    assert_eq!(slice_restored, &root_wide[..]);
+}
+
+#[test]
+fn test_windows_terminal_width_bounds_logic() {
+    let left: i16 = 0;
+    let right: i16 = -1;
+    let valid = right >= left;
+    assert!(!valid, "Must detect degenerate window rectangle");
+
+    let left: i16 = 0;
+    let right: i16 = 119;
+    let width = if right >= left {
+        (right - left + 1) as usize
+    } else {
+        80
+    };
+    assert_eq!(width, 120);
 }

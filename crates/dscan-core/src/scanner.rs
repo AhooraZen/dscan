@@ -1018,9 +1018,9 @@ pub struct WidePathStack {
 
 impl WidePathStack {
     pub fn new() -> Self {
-        Self {
-            wide: Vec::with_capacity(1024),
-        }
+        let mut wide = Vec::with_capacity(1024);
+        wide.push(0);
+        Self { wide }
     }
 
     #[cfg(windows)]
@@ -1034,6 +1034,7 @@ impl WidePathStack {
         {
             self.wide.pop();
         }
+        self.wide.push(0);
     }
 
     pub fn set_root_wide(&mut self, wide_root: &[u16]) {
@@ -1045,53 +1046,60 @@ impl WidePathStack {
         {
             self.wide.pop();
         }
+        self.wide.push(0);
     }
 
-    /// Push child directory wide characters. Returns the previous length to pop.
     #[inline(always)]
     pub fn push_child(&mut self, child_name_wide: &[u16]) -> usize {
-        let prev_len = self.wide.len();
+        let prev_len = self.wide.len().saturating_sub(1);
+        if self.wide.last() == Some(&0) {
+            self.wide.pop();
+        }
         if !self.wide.ends_with(&[b'\\' as u16]) && !self.wide.ends_with(&[b'/' as u16]) {
             self.wide.push(b'\\' as u16);
         }
         self.wide.extend_from_slice(child_name_wide);
+        self.wide.push(0);
         prev_len
     }
 
     #[inline(always)]
     pub fn truncate(&mut self, len: usize) {
         self.wide.truncate(len);
+        if self.wide.last() != Some(&0) {
+            self.wide.push(0);
+        }
     }
 
-    /// Returns a null-terminated pointer to pass directly to CreateFileW without allocation.
     #[inline(always)]
-    pub fn as_null_terminated(&mut self) -> *const u16 {
-        self.wide.push(0);
-        let ptr = self.wide.as_ptr();
-        self.wide.pop();
-        ptr
+    pub fn as_null_terminated(&self) -> *const u16 {
+        self.wide.as_ptr()
     }
 
     #[inline(always)]
     pub fn as_slice(&self) -> &[u16] {
-        &self.wide
+        if self.wide.len() > 1 {
+            &self.wide[..self.wide.len() - 1]
+        } else {
+            &[]
+        }
     }
 
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.wide.len()
+        self.wide.len().saturating_sub(1)
     }
 
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.wide.is_empty()
+        self.len() == 0
     }
 
     #[cfg(windows)]
     pub fn to_path_buf(&self) -> PathBuf {
         use std::ffi::OsString;
         use std::os::windows::ffi::OsStringExt;
-        PathBuf::from(OsString::from_wide(&self.wide))
+        PathBuf::from(OsString::from_wide(self.as_slice()))
     }
 }
 
@@ -1153,14 +1161,14 @@ fn scan_directory_tree_windows(
             let (status, info_bytes) =
                 unsafe { sys_nt_query_directory_file_fast(h_dir, buf_ptr, buf_len, restart_scan) };
 
-            if status != STATUS_SUCCESS || info_bytes == 0 {
+            if (status != STATUS_SUCCESS && status != STATUS_BUFFER_OVERFLOW) || info_bytes == 0 {
                 break;
             }
             restart_scan = false;
 
             let mut offset = 0usize;
             loop {
-                if offset + std::mem::size_of::<FileIdBothDirInfo>() > buf_slice.len() {
+                if offset + std::mem::size_of::<FileIdBothDirInfo>() > info_bytes {
                     break;
                 }
 
@@ -1173,7 +1181,7 @@ fn scan_directory_tree_windows(
                 let name_len_wchars = name_len_bytes / std::mem::size_of::<u16>();
 
                 let fn_offset = std::mem::offset_of!(FileIdBothDirInfo, file_name);
-                if offset + fn_offset + name_len_bytes > buf_slice.len() {
+                if offset + fn_offset + name_len_bytes > info_bytes {
                     break;
                 }
 
@@ -1231,7 +1239,7 @@ fn scan_directory_tree_windows(
                 }
 
                 if entry.next_entry_offset == 0
-                    || offset + (entry.next_entry_offset as usize) >= buf_slice.len()
+                    || offset + (entry.next_entry_offset as usize) >= info_bytes
                 {
                     break;
                 }

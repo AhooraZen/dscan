@@ -62,9 +62,9 @@ pub fn get_terminal_width() -> usize {
     // SAFETY: handle retrieved via standard GetStdHandle and passed to GetConsoleScreenBufferInfo.
     let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
     let ret = unsafe { GetConsoleScreenBufferInfo(handle, &mut csbi) };
-    if ret != 0 {
+    if ret != 0 && csbi.sr_window.right >= csbi.sr_window.left {
         let width = (csbi.sr_window.right - csbi.sr_window.left + 1) as usize;
-        if width > 10 {
+        if (10..=1024).contains(&width) {
             return width;
         }
     }

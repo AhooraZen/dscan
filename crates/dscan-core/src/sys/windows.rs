@@ -6,6 +6,7 @@ pub type RawHandle = *mut c_void;
 pub const INVALID_HANDLE_VALUE: RawHandle = -1isize as RawHandle;
 
 pub const FILE_LIST_DIRECTORY: u32 = 0x0001;
+pub const FILE_READ_ATTRIBUTES: u32 = 0x00000080;
 pub const FILE_SHARE_READ: u32 = 0x00000001;
 pub const FILE_SHARE_WRITE: u32 = 0x00000002;
 pub const FILE_SHARE_DELETE: u32 = 0x00000004;
@@ -24,7 +25,6 @@ pub const SL_RESTART_SCAN: u32 = 0x00000001;
 pub const SL_RETURN_SINGLE_ENTRY: u32 = 0x00000002;
 pub const SL_INDEX_SPECIFIED: u32 = 0x00000004;
 pub const SL_RETURN_ON_DISK_ENTRIES_ONLY: u32 = 0x00000200;
-pub const SL_NO_EXTENDED_ATTRIBUTES: u32 = 0x00000800;
 
 // Virtual Memory Flags
 pub const MEM_COMMIT: u32 = 0x00001000;
@@ -234,7 +234,7 @@ pub fn get_nt_query_directory_file() -> Option<NtQueryDirectoryFileFn> {
     })
 }
 
-/// Issues native NtQueryDirectoryFileEx with SL_NO_EXTENDED_ATTRIBUTES.
+/// Issues native NtQueryDirectoryFileEx with SL_RESTART_SCAN when restarting.
 /// Transparently falls back to NtQueryDirectoryFile and GetFileInformationByHandleEx.
 ///
 /// # Safety
@@ -247,10 +247,7 @@ pub unsafe fn sys_nt_query_directory_file_fast(
 ) -> (i32, usize) {
     let mut iosb = IoStatusBlock::default();
     if let Some(nt_ex) = get_nt_query_directory_file_ex() {
-        let mut flags = SL_NO_EXTENDED_ATTRIBUTES;
-        if restart_scan {
-            flags |= SL_RESTART_SCAN;
-        }
+        let flags = if restart_scan { SL_RESTART_SCAN } else { 0 };
         // SAFETY: nt_ex pointer is valid from ntdll, handle is valid, and buffer has length len.
         let status = unsafe {
             nt_ex(
@@ -294,7 +291,32 @@ pub unsafe fn sys_nt_query_directory_file_fast(
         // SAFETY: handle and buffer are valid for GetFileInformationByHandleEx.
         let ret = unsafe { GetFileInformationByHandleEx(handle, class, buffer, len) };
         if ret != 0 {
-            (STATUS_SUCCESS, len as usize)
+            let mut actual_bytes = 0usize;
+            let mut offset = 0usize;
+            let min_hdr = std::mem::size_of::<FileIdBothDirInfo>();
+            let fn_offset = std::mem::offset_of!(FileIdBothDirInfo, file_name);
+
+            while offset + min_hdr <= len as usize {
+                let entry = unsafe {
+                    std::ptr::read_unaligned(
+                        (buffer as *const u8).add(offset) as *const FileIdBothDirInfo
+                    )
+                };
+                let entry_end = offset + fn_offset + (entry.file_name_length as usize);
+                if entry_end > len as usize {
+                    break;
+                }
+                actual_bytes = entry_end;
+                if entry.next_entry_offset == 0 {
+                    break;
+                }
+                let next = offset + (entry.next_entry_offset as usize);
+                if next <= offset || next >= len as usize {
+                    break;
+                }
+                offset = next;
+            }
+            (STATUS_SUCCESS, actual_bytes)
         } else {
             (STATUS_NO_MORE_FILES, 0)
         }
@@ -327,7 +349,7 @@ pub unsafe fn open_dir_from_wide_ptr(ptr: *const u16) -> Option<RawHandle> {
     let handle = unsafe {
         CreateFileW(
             ptr,
-            FILE_LIST_DIRECTORY,
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             std::ptr::null_mut(),
             OPEN_EXISTING,
