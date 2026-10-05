@@ -3,6 +3,9 @@ use dscan::scanner::{print_report, run_scan};
 use dscan::ui::print_header;
 
 fn main() {
+    #[cfg(windows)]
+    dscan::sys::enable_virtual_terminal_processing();
+
     let options = match CliOptions::parse() {
         Some(opts) => opts,
         None => return,

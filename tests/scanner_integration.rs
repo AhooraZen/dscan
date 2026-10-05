@@ -1,9 +1,12 @@
 use dscan::{CliOptions, run_scan};
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
+#[cfg(unix)]
 use std::process::Command;
 
 #[test]
+#[cfg(unix)]
 fn test_synthetic_tree_matches_du() {
     let temp_dir = std::env::temp_dir().join(format!("dscan_integ_{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);
@@ -98,6 +101,76 @@ fn test_synthetic_tree_matches_du() {
 }
 
 #[test]
+fn test_synthetic_tree_rollup_cross_platform() {
+    let temp_dir = std::env::temp_dir().join(format!("dscan_cross_plat_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    fs::create_dir_all(temp_dir.join("a/b/c")).unwrap();
+    fs::create_dir_all(temp_dir.join("a/d")).unwrap();
+    fs::create_dir_all(temp_dir.join("empty_dir")).unwrap();
+
+    fs::write(temp_dir.join("a/b/c/file1.bin"), vec![0x41u8; 12288]).unwrap();
+    fs::write(temp_dir.join("a/d/file2.bin"), vec![0x42u8; 24576]).unwrap();
+    fs::write(temp_dir.join("root_file.txt"), "hello world\n").unwrap();
+
+    let options = CliOptions {
+        target_path: temp_dir.to_str().unwrap().to_string(),
+        top_limit: 20,
+        max_depth: 4,
+        threads: 4,
+        excludes: vec![],
+        follow_symlinks: false,
+        cross_filesystems: false,
+    };
+
+    let result = run_scan(&options).expect("run_scan failed");
+
+    assert_eq!(result.total_files, 3);
+    assert!(result.total_bytes >= 12288 + 24576 + 12);
+
+    let dir_a = temp_dir.join("a");
+    let dir_b = temp_dir.join("a/b");
+    let dir_c = temp_dir.join("a/b/c");
+    let dir_d = temp_dir.join("a/d");
+
+    let sz_a = result
+        .top_dirs
+        .iter()
+        .find(|(p, _)| p == &dir_a)
+        .map(|(_, s)| *s)
+        .unwrap_or(0);
+    let sz_b = result
+        .top_dirs
+        .iter()
+        .find(|(p, _)| p == &dir_b)
+        .map(|(_, s)| *s)
+        .unwrap_or(0);
+    let sz_c = result
+        .top_dirs
+        .iter()
+        .find(|(p, _)| p == &dir_c)
+        .map(|(_, s)| *s)
+        .unwrap_or(0);
+    let sz_d = result
+        .top_dirs
+        .iter()
+        .find(|(p, _)| p == &dir_d)
+        .map(|(_, s)| *s)
+        .unwrap_or(0);
+
+    assert!(
+        sz_b >= sz_c,
+        "size of a/b ({sz_b}) must be >= a/b/c ({sz_c})"
+    );
+    assert!(
+        sz_a >= sz_b + sz_d,
+        "size of a ({sz_a}) must be >= a/b ({sz_b}) + a/d ({sz_d})"
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
 fn test_multi_threaded_scalability() {
     let temp_dir = std::env::temp_dir().join(format!("dscan_threads_{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);
@@ -130,6 +203,7 @@ fn test_multi_threaded_scalability() {
 }
 
 #[test]
+#[cfg(unix)]
 fn test_symlink_directory_traversal() {
     let temp_dir = std::env::temp_dir().join(format!("dscan_symlink_{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);
