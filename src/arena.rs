@@ -1,4 +1,94 @@
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
 pub const ARENA_FLAG_ROOT: u16 = 1 << 0;
+
+pub const TOP_FILE_INLINE_MAX: usize = 48;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TopFileCandidate {
+    pub size: u64,
+    pub dir_node_idx: u32,
+    pub name_len: u16,
+    pub is_spill: u8,
+    pub name_inline: [u8; TOP_FILE_INLINE_MAX],
+    pub spill_offset: u32,
+}
+
+impl Ord for TopFileCandidate {
+    #[inline(always)]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.size
+            .cmp(&other.size)
+            .then_with(|| self.dir_node_idx.cmp(&other.dir_node_idx))
+            .then_with(|| self.name_len.cmp(&other.name_len))
+            .then_with(|| self.name_inline.cmp(&other.name_inline))
+            .then_with(|| self.spill_offset.cmp(&other.spill_offset))
+    }
+}
+
+impl PartialOrd for TopFileCandidate {
+    #[inline(always)]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalTopFiles {
+    pub heap: BinaryHeap<Reverse<TopFileCandidate>>,
+    pub limit: usize,
+}
+
+impl Default for LocalTopFiles {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl LocalTopFiles {
+    pub fn new(limit: usize) -> Self {
+        Self {
+            heap: BinaryHeap::with_capacity(limit + 8),
+            limit,
+        }
+    }
+
+    #[inline(always)]
+    pub fn push(&mut self, size: u64, dir_node_idx: u32, name: &[u8], arena: &mut DirArena) {
+        if self.limit == 0 {
+            return;
+        }
+
+        if self.heap.len() >= self.limit {
+            if let Some(Reverse(min_cand)) = self.heap.peek()
+                && size <= min_cand.size
+            {
+                return;
+            }
+            self.heap.pop();
+        }
+
+        let mut cand = TopFileCandidate {
+            size,
+            dir_node_idx,
+            name_len: name.len() as u16,
+            is_spill: 0,
+            name_inline: [0u8; TOP_FILE_INLINE_MAX],
+            spill_offset: 0,
+        };
+
+        if name.len() <= TOP_FILE_INLINE_MAX {
+            cand.name_inline[..name.len()].copy_from_slice(name);
+        } else {
+            cand.is_spill = 1;
+            cand.spill_offset = arena.names.len() as u32;
+            arena.names.extend_from_slice(name);
+        }
+
+        self.heap.push(Reverse(cand));
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +246,29 @@ impl DirArena {
                 out.push(b'/');
             }
             out.extend_from_slice(name);
+        }
+    }
+
+    /// Reconstructs the full absolute path for a top file candidate into `out`.
+    pub fn resolve_top_file_path(&self, cand: &TopFileCandidate, out: &mut Vec<u8>) {
+        self.reconstruct_path(cand.dir_node_idx, out);
+        let sep = if cfg!(windows) && out.contains(&b'\\') {
+            b'\\'
+        } else {
+            b'/'
+        };
+        if !out.ends_with(b"/") && !out.ends_with(b"\\") && !out.is_empty() {
+            out.push(sep);
+        }
+        if cand.is_spill == 0 {
+            let len = cand.name_len as usize;
+            out.extend_from_slice(&cand.name_inline[..len]);
+        } else {
+            let start = cand.spill_offset as usize;
+            let end = start + cand.name_len as usize;
+            if end <= self.names.len() {
+                out.extend_from_slice(&self.names[start..end]);
+            }
         }
     }
 }

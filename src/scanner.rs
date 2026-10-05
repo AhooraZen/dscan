@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::arena::DirArena;
+use crate::arena::{DirArena, LocalTopFiles, TopFileCandidate};
 use crate::cli::CliOptions;
 use crate::simd::FastExclusionMatcher;
 #[cfg(unix)]
@@ -160,6 +160,36 @@ impl Drop for AlignedBuffer {
 // SAFETY: AlignedBuffer owns its memory allocation and can be transferred across threads.
 unsafe impl Send for AlignedBuffer {}
 
+pub struct DualBuffer {
+    pub buf_a: AlignedBuffer,
+    pub buf_b: AlignedBuffer,
+    pub active_is_a: bool,
+}
+
+impl DualBuffer {
+    pub fn new(capacity: usize, align: usize) -> Self {
+        Self {
+            buf_a: AlignedBuffer::new(capacity, align),
+            buf_b: AlignedBuffer::new(capacity, align),
+            active_is_a: true,
+        }
+    }
+
+    #[inline(always)]
+    pub fn current_mut(&mut self) -> &mut AlignedBuffer {
+        if self.active_is_a {
+            &mut self.buf_a
+        } else {
+            &mut self.buf_b
+        }
+    }
+
+    #[inline(always)]
+    pub fn swap(&mut self) {
+        self.active_is_a = !self.active_is_a;
+    }
+}
+
 #[repr(align(64))]
 pub struct CachePadded<T>(pub T);
 
@@ -214,7 +244,8 @@ impl GlobalState {
 
 pub struct ThreadLocalResult {
     pub dir_sizes: Vec<(PathBuf, u64)>,
-    pub top_files: BinaryHeap<Reverse<(u64, PathBuf)>>,
+    pub top_files: LocalTopFiles,
+    pub arena: DirArena,
 }
 
 #[derive(Debug)]
@@ -234,20 +265,22 @@ pub fn is_excluded_dir(path_bytes: &[u8], name_bytes: &[u8], excludes: &[Vec<u8>
     matcher.is_excluded(path_bytes, name_bytes)
 }
 
+const BATCH_FILE_THRESHOLD: u64 = 8192;
+
 #[inline(always)]
-fn push_top_file(
-    top_files: &mut BinaryHeap<Reverse<(u64, PathBuf)>>,
-    limit: usize,
-    sz: u64,
-    build_path: impl FnOnce() -> PathBuf,
+fn record_file_stat(
+    local_files: &mut u64,
+    local_bytes: &mut u64,
+    file_size: u64,
+    state: &Arc<GlobalState>,
 ) {
-    if top_files.len() < limit {
-        top_files.push(Reverse((sz, build_path())));
-    } else if let Some(Reverse((min_sz, _))) = top_files.peek()
-        && sz > *min_sz
-    {
-        top_files.pop();
-        top_files.push(Reverse((sz, build_path())));
+    *local_files += 1;
+    *local_bytes += file_size;
+    if *local_files >= BATCH_FILE_THRESHOLD {
+        state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
+        state.total_files.fetch_add(*local_files, Ordering::Relaxed);
+        *local_bytes = 0;
+        *local_files = 0;
     }
 }
 
@@ -280,13 +313,12 @@ impl BatchState {
 fn flush_statx_batch(
     batcher: &mut crate::sys::uring::IoUringBatcher,
     batch: &mut BatchState,
-    path_stack: &[u8],
-    dir_bytes: &[u8],
+    current_node: u32,
     local_dir_size: &mut u64,
     local_files: &mut u64,
     local_bytes: &mut u64,
-    local_top_files: &mut BinaryHeap<Reverse<(u64, PathBuf)>>,
-    top_limit: usize,
+    local_top_files: &mut LocalTopFiles,
+    local_arena: &mut DirArena,
     state: &Arc<GlobalState>,
 ) {
     if batch.count == 0 {
@@ -305,32 +337,12 @@ fn flush_statx_batch(
                 let stx = &batch.statx_bufs[idx];
                 let sz = stx.stx_blocks * 512;
                 *local_dir_size += sz;
-                *local_files += 1;
-                *local_bytes += sz;
-
-                if *local_files >= 1024 {
-                    state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
-                    state.total_files.fetch_add(*local_files, Ordering::Relaxed);
-                    *local_bytes = 0;
-                    *local_files = 0;
-                }
+                record_file_stat(local_files, local_bytes, sz, state);
 
                 let name_len = batch.name_lens[idx];
                 let name_bytes = &batch.name_bufs[idx][..name_len];
 
-                push_top_file(local_top_files, top_limit, sz, || {
-                    let mut full = Vec::with_capacity(path_stack.len() + name_len + 2);
-                    if dir_bytes == b"." {
-                        full.extend_from_slice(name_bytes);
-                    } else {
-                        full.extend_from_slice(dir_bytes);
-                        if !full.ends_with(b"/") {
-                            full.push(b'/');
-                        }
-                        full.extend_from_slice(name_bytes);
-                    }
-                    PathBuf::from(std::ffi::OsStr::from_bytes(&full))
-                });
+                local_top_files.push(sz, current_node, name_bytes, local_arena);
             }
             reaped += 1;
         });
@@ -343,16 +355,17 @@ fn flush_statx_batch(
 #[allow(clippy::too_many_arguments)]
 fn scan_directory_tree(
     dir_path: &Path,
+    dir_fd: Option<i32>,
     current_node: u32,
     rel_depth: usize,
     state: &Arc<GlobalState>,
     worker: &Worker<PathBuf>,
-    buffer: &mut AlignedBuffer,
+    dual_buffer: &mut DualBuffer,
     #[cfg(target_os = "linux")] batcher: &mut Option<crate::sys::uring::IoUringBatcher>,
     #[cfg(target_os = "linux")] batch: &mut BatchState,
     path_stack: &mut Vec<u8>,
     local_arena: &mut DirArena,
-    local_top_files: &mut BinaryHeap<Reverse<(u64, PathBuf)>>,
+    local_top_files: &mut LocalTopFiles,
     local_files: &mut u64,
     local_bytes: &mut u64,
 ) {
@@ -360,15 +373,20 @@ fn scan_directory_tree(
     let mut sub_dirs: Vec<Vec<u8>> = Vec::new();
 
     let root_dev = state.config.root_dev;
-    let top_limit = state.config.top_limit;
     let matcher = &state.config.matcher;
 
     let dir_bytes = dir_path.as_os_str().as_bytes();
     path_stack.clear();
     path_stack.extend_from_slice(dir_bytes);
 
-    if let Some(fd) = open_dir(dir_path) {
-        if !state.config.cross_filesystems {
+    let (fd_opt, need_dev_check) = if let Some(fd) = dir_fd {
+        (Some(fd), false)
+    } else {
+        (open_dir(dir_path), true)
+    };
+
+    if let Some(fd) = fd_opt {
+        if need_dev_check && !state.config.cross_filesystems {
             let mut stx = crate::sys::Statx::default();
             let empty_path = b"\0";
             let ret = crate::sys::sys_statx(
@@ -381,14 +399,14 @@ fn scan_directory_tree(
             if ret == 0 {
                 let dev = crate::sys::makedev(stx.stx_dev_major, stx.stx_dev_minor);
                 if dev != root_dev {
-                    // SAFETY: fd was opened by open_dir.
+                    // SAFETY: fd was opened by open_dir or open_dir_at2.
                     unsafe { crate::sys::close(fd) };
                     return;
                 }
             }
         }
 
-        let buf_slice = buffer.as_mut_slice();
+        let buf_slice = dual_buffer.current_mut().as_mut_slice();
         loop {
             // SAFETY: fd is valid open directory descriptor, buffer is a valid aligned slice.
             let nread = unsafe {
@@ -482,13 +500,12 @@ fn scan_directory_tree(
                                     flush_statx_batch(
                                         b,
                                         batch,
-                                        path_stack,
-                                        dir_bytes,
+                                        current_node,
                                         &mut local_dir_size,
                                         local_files,
                                         local_bytes,
                                         local_top_files,
-                                        top_limit,
+                                        local_arena,
                                         state,
                                     );
                                 }
@@ -507,18 +524,23 @@ fn scan_directory_tree(
                                 if res == 0 {
                                     let sz = stx.stx_blocks * 512;
                                     local_dir_size += sz;
-                                    *local_files += 1;
-                                    *local_bytes += sz;
-                                    push_top_file(local_top_files, top_limit, sz, || {
-                                        PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
-                                    });
+                                    record_file_stat(local_files, local_bytes, sz, state);
+                                    local_top_files.push(sz, current_node, name_bytes, local_arena);
                                 }
                             }
                         } else {
-                            // Synchronous statx fallback if io_uring is unavailable
                             let mut stx = crate::sys::Statx::default();
-                            let path_c =
-                                buf_slice[name_start..].as_ptr() as *const std::ffi::c_char;
+                            let mut name_c = [0u8; 256];
+                            let path_c = if name_bytes.len() < 255 {
+                                name_c[..name_bytes.len()].copy_from_slice(name_bytes);
+                                name_c[name_bytes.len()] = 0;
+                                name_c.as_ptr() as *const std::ffi::c_char
+                            } else {
+                                let mut long_c = name_bytes.to_vec();
+                                long_c.push(0);
+                                long_c.as_ptr() as *const std::ffi::c_char
+                            };
+
                             let res = crate::sys::sys_statx(
                                 fd,
                                 path_c,
@@ -529,19 +551,8 @@ fn scan_directory_tree(
                             if res == 0 {
                                 let sz = stx.stx_blocks * 512;
                                 local_dir_size += sz;
-                                *local_files += 1;
-                                *local_bytes += sz;
-
-                                if *local_files >= 1024 {
-                                    state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
-                                    state.total_files.fetch_add(*local_files, Ordering::Relaxed);
-                                    *local_bytes = 0;
-                                    *local_files = 0;
-                                }
-
-                                push_top_file(local_top_files, top_limit, sz, || {
-                                    PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
-                                });
+                                record_file_stat(local_files, local_bytes, sz, state);
+                                local_top_files.push(sz, current_node, name_bytes, local_arena);
                             }
                         }
 
@@ -560,11 +571,8 @@ fn scan_directory_tree(
                             if res == 0 {
                                 let sz = stx.stx_blocks * 512;
                                 local_dir_size += sz;
-                                *local_files += 1;
-                                *local_bytes += sz;
-                                push_top_file(local_top_files, top_limit, sz, || {
-                                    PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
-                                });
+                                record_file_stat(local_files, local_bytes, sz, state);
+                                local_top_files.push(sz, current_node, name_bytes, local_arena);
                             }
                         }
                     }
@@ -594,19 +602,8 @@ fn scan_directory_tree(
                             } else if file_type == S_IFREG {
                                 let sz = stx.stx_blocks * 512;
                                 local_dir_size += sz;
-                                *local_files += 1;
-                                *local_bytes += sz;
-
-                                if *local_files >= 1024 {
-                                    state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
-                                    state.total_files.fetch_add(*local_files, Ordering::Relaxed);
-                                    *local_bytes = 0;
-                                    *local_files = 0;
-                                }
-
-                                push_top_file(local_top_files, top_limit, sz, || {
-                                    PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
-                                });
+                                record_file_stat(local_files, local_bytes, sz, state);
+                                local_top_files.push(sz, current_node, name_bytes, local_arena);
                             }
                         }
                     }
@@ -622,18 +619,99 @@ fn scan_directory_tree(
             flush_statx_batch(
                 b,
                 batch,
-                path_stack,
-                dir_bytes,
+                current_node,
                 &mut local_dir_size,
                 local_files,
                 local_bytes,
                 local_top_files,
-                top_limit,
+                local_arena,
                 state,
             );
         }
 
-        // SAFETY: fd was opened by open_dir.
+        local_arena.add_direct_bytes(current_node, local_dir_size);
+
+        // Dynamic work-stealing offload to idle peers
+        if sub_dirs.len() > 1 && state.active_workers.load(Ordering::Relaxed) < state.config.threads
+        {
+            let half = sub_dirs.split_off(sub_dirs.len() / 2);
+            for sub_name in half {
+                let child_path = if dir_bytes == b"." {
+                    PathBuf::from(std::ffi::OsStr::from_bytes(&sub_name))
+                } else {
+                    dir_path.join(std::ffi::OsStr::from_bytes(&sub_name))
+                };
+                worker.push(child_path);
+            }
+            state.cvar.notify_all();
+        }
+
+        for sub_name in sub_dirs {
+            let (child_node, next_rel_depth) = if rel_depth < state.config.max_depth {
+                let next_d = rel_depth + 1;
+                let node = local_arena.add_node(current_node, next_d as u16, &sub_name);
+                (node, next_d)
+            } else {
+                (current_node, rel_depth + 1)
+            };
+
+            let orig_len = path_stack.len();
+            if dir_bytes == b"." {
+                path_stack.clear();
+                path_stack.extend_from_slice(&sub_name);
+            } else {
+                if !path_stack.ends_with(b"/") && !path_stack.is_empty() {
+                    path_stack.push(b'/');
+                }
+                path_stack.extend_from_slice(&sub_name);
+            }
+            let child_path = PathBuf::from(std::ffi::OsStr::from_bytes(path_stack));
+
+            let child_fd = if sub_name.len() < 255 {
+                let mut name_c = [0u8; 256];
+                name_c[..sub_name.len()].copy_from_slice(&sub_name);
+                name_c[sub_name.len()] = 0;
+                match crate::sys::open_dir_at2(
+                    fd,
+                    name_c.as_ptr() as *const std::ffi::c_char,
+                    !state.config.cross_filesystems,
+                ) {
+                    Ok(cfd) => Some(cfd),
+                    Err(crate::sys::EXDEV) => {
+                        path_stack.truncate(orig_len);
+                        continue;
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            dual_buffer.swap();
+            scan_directory_tree(
+                &child_path,
+                child_fd,
+                child_node,
+                next_rel_depth,
+                state,
+                worker,
+                dual_buffer,
+                #[cfg(target_os = "linux")]
+                batcher,
+                #[cfg(target_os = "linux")]
+                batch,
+                path_stack,
+                local_arena,
+                local_top_files,
+                local_files,
+                local_bytes,
+            );
+            dual_buffer.swap();
+
+            path_stack.truncate(orig_len);
+        }
+
+        // SAFETY: fd was opened by open_dir or open_dir_at2.
         unsafe { crate::sys::close(fd) };
     } else if let Ok(entries) = fs::read_dir(dir_path) {
         for entry in entries.flatten() {
@@ -651,78 +729,73 @@ fn scan_directory_tree(
                 } else if meta.dev() == root_dev {
                     let sz = meta.blocks() * 512;
                     local_dir_size += sz;
-                    *local_files += 1;
-                    *local_bytes += sz;
-
-                    if *local_files >= 1024 {
-                        state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
-                        state.total_files.fetch_add(*local_files, Ordering::Relaxed);
-                        *local_bytes = 0;
-                        *local_files = 0;
-                    }
-
-                    push_top_file(local_top_files, top_limit, sz, || path);
+                    record_file_stat(local_files, local_bytes, sz, state);
+                    local_top_files.push(sz, current_node, &name_bytes, local_arena);
                 }
             }
         }
-    }
 
-    local_arena.add_direct_bytes(current_node, local_dir_size);
+        local_arena.add_direct_bytes(current_node, local_dir_size);
 
-    // Dynamic work-stealing offload to idle peers
-    if sub_dirs.len() > 1 && state.active_workers.load(Ordering::Relaxed) < state.config.threads {
-        let half = sub_dirs.split_off(sub_dirs.len() / 2);
-        for sub_name in half {
-            let child_path = if dir_bytes == b"." {
-                PathBuf::from(std::ffi::OsStr::from_bytes(&sub_name))
-            } else {
-                dir_path.join(std::ffi::OsStr::from_bytes(&sub_name))
-            };
-            worker.push(child_path);
-        }
-        state.cvar.notify_all();
-    }
-
-    for sub_name in sub_dirs {
-        let (child_node, next_rel_depth) = if rel_depth < state.config.max_depth {
-            let next_d = rel_depth + 1;
-            let node = local_arena.add_node(current_node, next_d as u16, &sub_name);
-            (node, next_d)
-        } else {
-            (current_node, rel_depth + 1)
-        };
-
-        let orig_len = path_stack.len();
-        if dir_bytes == b"." {
-            path_stack.clear();
-            path_stack.extend_from_slice(&sub_name);
-        } else {
-            if !path_stack.ends_with(b"/") && !path_stack.is_empty() {
-                path_stack.push(b'/');
+        // Dynamic work-stealing offload to idle peers
+        if sub_dirs.len() > 1 && state.active_workers.load(Ordering::Relaxed) < state.config.threads
+        {
+            let half = sub_dirs.split_off(sub_dirs.len() / 2);
+            for sub_name in half {
+                let child_path = if dir_bytes == b"." {
+                    PathBuf::from(std::ffi::OsStr::from_bytes(&sub_name))
+                } else {
+                    dir_path.join(std::ffi::OsStr::from_bytes(&sub_name))
+                };
+                worker.push(child_path);
             }
-            path_stack.extend_from_slice(&sub_name);
+            state.cvar.notify_all();
         }
-        let child_path = PathBuf::from(std::ffi::OsStr::from_bytes(path_stack));
 
-        scan_directory_tree(
-            &child_path,
-            child_node,
-            next_rel_depth,
-            state,
-            worker,
-            buffer,
-            #[cfg(target_os = "linux")]
-            batcher,
-            #[cfg(target_os = "linux")]
-            batch,
-            path_stack,
-            local_arena,
-            local_top_files,
-            local_files,
-            local_bytes,
-        );
+        for sub_name in sub_dirs {
+            let (child_node, next_rel_depth) = if rel_depth < state.config.max_depth {
+                let next_d = rel_depth + 1;
+                let node = local_arena.add_node(current_node, next_d as u16, &sub_name);
+                (node, next_d)
+            } else {
+                (current_node, rel_depth + 1)
+            };
 
-        path_stack.truncate(orig_len);
+            let orig_len = path_stack.len();
+            if dir_bytes == b"." {
+                path_stack.clear();
+                path_stack.extend_from_slice(&sub_name);
+            } else {
+                if !path_stack.ends_with(b"/") && !path_stack.is_empty() {
+                    path_stack.push(b'/');
+                }
+                path_stack.extend_from_slice(&sub_name);
+            }
+            let child_path = PathBuf::from(std::ffi::OsStr::from_bytes(path_stack));
+
+            dual_buffer.swap();
+            scan_directory_tree(
+                &child_path,
+                None,
+                child_node,
+                next_rel_depth,
+                state,
+                worker,
+                dual_buffer,
+                #[cfg(target_os = "linux")]
+                batcher,
+                #[cfg(target_os = "linux")]
+                batch,
+                path_stack,
+                local_arena,
+                local_top_files,
+                local_files,
+                local_bytes,
+            );
+            dual_buffer.swap();
+
+            path_stack.truncate(orig_len);
+        }
     }
 }
 
@@ -734,10 +807,10 @@ fn scan_directory_tree_windows(
     rel_depth: usize,
     state: &Arc<GlobalState>,
     worker: &Worker<PathBuf>,
-    buffer: &mut AlignedBuffer,
+    dual_buffer: &mut DualBuffer,
     scratch: &mut Vec<u16>,
     local_arena: &mut DirArena,
-    local_top_files: &mut BinaryHeap<Reverse<(u64, PathBuf)>>,
+    local_top_files: &mut LocalTopFiles,
     local_files: &mut u64,
     local_bytes: &mut u64,
 ) {
@@ -749,7 +822,6 @@ fn scan_directory_tree_windows(
     let mut sub_dirs: Vec<PathBuf> = Vec::new();
 
     let root_dev = state.config.root_dev;
-    let top_limit = state.config.top_limit;
     let matcher = &state.config.matcher;
 
     if let Some(h_dir) = open_dir_scratch(dir_path, scratch) {
@@ -763,7 +835,7 @@ fn scan_directory_tree_windows(
             return;
         }
 
-        let buf_slice = buffer.as_mut_slice();
+        let buf_slice = dual_buffer.current_mut().as_mut_slice();
         let buf_ptr = buf_slice.as_mut_ptr() as *mut std::ffi::c_void;
         let buf_len = buf_slice.len() as u32;
         let mut restart_scan = true;
@@ -832,17 +904,13 @@ fn scan_directory_tree_windows(
                             };
 
                             local_dir_size += sz;
-                            *local_files += 1;
-                            *local_bytes += sz;
-
-                            if *local_files >= 1024 {
-                                state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
-                                state.total_files.fetch_add(*local_files, Ordering::Relaxed);
-                                *local_bytes = 0;
-                                *local_files = 0;
-                            }
-
-                            push_top_file(local_top_files, top_limit, sz, || child_path);
+                            record_file_stat(local_files, local_bytes, sz, state);
+                            local_top_files.push(
+                                sz,
+                                current_node,
+                                os_name_str.as_bytes(),
+                                local_arena,
+                            );
                         }
                     }
                 }
@@ -874,17 +942,8 @@ fn scan_directory_tree_windows(
                 } else {
                     let sz = meta.len();
                     local_dir_size += sz;
-                    *local_files += 1;
-                    *local_bytes += sz;
-
-                    if *local_files >= 1024 {
-                        state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
-                        state.total_files.fetch_add(*local_files, Ordering::Relaxed);
-                        *local_bytes = 0;
-                        *local_files = 0;
-                    }
-
-                    push_top_file(local_top_files, top_limit, sz, || path);
+                    record_file_stat(local_files, local_bytes, sz, state);
+                    local_top_files.push(sz, current_node, &name_bytes, local_arena);
                 }
             }
         }
@@ -910,19 +969,21 @@ fn scan_directory_tree_windows(
             (current_node, rel_depth + 1)
         };
 
+        dual_buffer.swap();
         scan_directory_tree_windows(
             &sub,
             child_node,
             next_rel_depth,
             state,
             worker,
-            buffer,
+            dual_buffer,
             scratch,
             local_arena,
             local_top_files,
             local_files,
             local_bytes,
         );
+        dual_buffer.swap();
     }
 }
 
@@ -934,9 +995,8 @@ fn worker_loop(
     crate::sys::pin_thread_to_core(thread_id);
 
     let mut local_arena = DirArena::new();
-    let mut local_top_files: BinaryHeap<Reverse<(u64, PathBuf)>> =
-        BinaryHeap::with_capacity(state.config.top_limit + 10);
-    let mut aligned_buffer = AlignedBuffer::new(512 * 1024, 4096);
+    let mut local_top_files = LocalTopFiles::new(state.config.top_limit);
+    let mut dual_buffer = DualBuffer::new(512 * 1024, 4096);
     #[cfg(unix)]
     let mut path_stack = Vec::with_capacity(4096);
     #[cfg(windows)]
@@ -962,16 +1022,26 @@ fn worker_loop(
         let task = if let Some(t) = worker.pop() {
             Some(t)
         } else {
-            // 2. Try stealing from peers (FIFO)
+            // 2. Try bulk stealing from peers (FIFO)
             let mut stolen = None;
             for offset in 1..num_stealers {
                 let target_idx = (thread_id + offset) % num_stealers;
-                match state.stealers[target_idx].steal() {
-                    Steal::Success(t) => {
-                        stolen = Some(t);
-                        break;
+                let count = state.stealers[target_idx].steal_batch(&worker, 32);
+                if count > 0 {
+                    stolen = worker.pop();
+                    break;
+                }
+            }
+            if stolen.is_none() {
+                for offset in 1..num_stealers {
+                    let target_idx = (thread_id + offset) % num_stealers;
+                    match state.stealers[target_idx].steal() {
+                        Steal::Success(t) => {
+                            stolen = Some(t);
+                            break;
+                        }
+                        Steal::Retry | Steal::Empty => continue,
                     }
-                    Steal::Retry | Steal::Empty => continue,
                 }
             }
             stolen
@@ -1002,11 +1072,12 @@ fn worker_loop(
             #[cfg(unix)]
             scan_directory_tree(
                 &current_dir,
+                None,
                 task_node,
                 rel_depth,
                 &state,
                 &worker,
-                &mut aligned_buffer,
+                &mut dual_buffer,
                 #[cfg(target_os = "linux")]
                 &mut batcher,
                 #[cfg(target_os = "linux")]
@@ -1025,23 +1096,22 @@ fn worker_loop(
                 rel_depth,
                 &state,
                 &worker,
-                &mut aligned_buffer,
+                &mut dual_buffer,
                 &mut scratch,
                 &mut local_arena,
                 &mut local_top_files,
                 &mut local_files,
                 &mut local_bytes,
             );
-
-            // Flush remaining batched counts on directory completion
+        } else {
+            // Flush remaining counts when transitioning to idle
             if local_files > 0 {
                 state.total_bytes.fetch_add(local_bytes, Ordering::Relaxed);
                 state.total_files.fetch_add(local_files, Ordering::Relaxed);
                 local_bytes = 0;
                 local_files = 0;
             }
-        } else {
-            // No task available
+
             if is_active {
                 state.active_workers.fetch_sub(1, Ordering::SeqCst);
                 is_active = false;
@@ -1071,6 +1141,11 @@ fn worker_loop(
         }
     }
 
+    if local_files > 0 {
+        state.total_bytes.fetch_add(local_bytes, Ordering::Relaxed);
+        state.total_files.fetch_add(local_files, Ordering::Relaxed);
+    }
+
     local_arena.rollup();
     let mut dir_sizes = Vec::with_capacity(local_arena.len());
     let mut path_scratch = Vec::with_capacity(512);
@@ -1087,6 +1162,7 @@ fn worker_loop(
     ThreadLocalResult {
         dir_sizes,
         top_files: local_top_files,
+        arena: local_arena,
     }
 }
 
@@ -1210,16 +1286,29 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
     clear_spinner_line();
 
     // Merge Thread-Local Results and hierarchical bottom-up rollup
-    let mut final_top_files: BinaryHeap<Reverse<(u64, PathBuf)>> = BinaryHeap::new();
+    let mut merged_top_heap: BinaryHeap<Reverse<(TopFileCandidate, usize)>> =
+        BinaryHeap::with_capacity(options.top_limit + 16);
     let mut all_dirs: Vec<(PathBuf, u64)> = Vec::new();
+    let mut arenas = Vec::with_capacity(all_results.len());
 
-    for res in all_results {
+    for (worker_idx, res) in all_results.into_iter().enumerate() {
         for (k, v) in res.dir_sizes {
             all_dirs.push((k, v));
         }
-        for item in res.top_files {
-            final_top_files.push(item);
+        if options.top_limit > 0 {
+            for Reverse(cand) in res.top_files.heap {
+                if merged_top_heap.len() >= options.top_limit {
+                    if let Some(Reverse((min_cand, _))) = merged_top_heap.peek()
+                        && cand.size <= min_cand.size
+                    {
+                        continue;
+                    }
+                    merged_top_heap.pop();
+                }
+                merged_top_heap.push(Reverse((cand, worker_idx)));
+            }
         }
+        arenas.push(res.arena);
     }
 
     // Sort all_dirs so duplicates (if any) are adjacent and can be merged in-place
@@ -1285,8 +1374,19 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
 
     let max_dir_size = sorted_dirs.first().map(|(_, s)| *s).unwrap_or(1).max(1);
 
-    let mut files_vec: Vec<(u64, PathBuf)> =
-        final_top_files.into_iter().map(|Reverse(x)| x).collect();
+    let mut files_vec: Vec<(u64, PathBuf)> = Vec::with_capacity(merged_top_heap.len());
+    let mut path_buf = Vec::with_capacity(512);
+
+    for Reverse((cand, worker_idx)) in merged_top_heap {
+        path_buf.clear();
+        arenas[worker_idx].resolve_top_file_path(&cand, &mut path_buf);
+        #[cfg(unix)]
+        let pb = PathBuf::from(std::ffi::OsStr::from_bytes(&path_buf));
+        #[cfg(windows)]
+        let pb = PathBuf::from(String::from_utf8_lossy(&path_buf).as_ref());
+        files_vec.push((cand.size, pb));
+    }
+
     files_vec.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     files_vec.dedup_by(|a, b| a.1 == b.1);
 
@@ -1455,5 +1555,18 @@ mod tests {
     fn test_thread_pinning() {
         let pinned = crate::sys::pin_thread_to_core(0);
         let _ = pinned;
+    }
+
+    #[test]
+    fn test_dual_buffer() {
+        let mut dual = DualBuffer::new(4096, 64);
+        assert!(dual.active_is_a);
+        dual.current_mut().as_mut_slice()[0] = 42;
+        dual.swap();
+        assert!(!dual.active_is_a);
+        dual.current_mut().as_mut_slice()[0] = 84;
+        assert_eq!(dual.current_mut().as_mut_slice()[0], 84);
+        dual.swap();
+        assert_eq!(dual.current_mut().as_mut_slice()[0], 42);
     }
 }

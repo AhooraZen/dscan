@@ -1,4 +1,5 @@
-use dscan::arena::DirArena;
+use dscan::arena::{DirArena, LocalTopFiles, TOP_FILE_INLINE_MAX};
+use std::cmp::Reverse;
 
 #[test]
 fn test_deep_nested_tree_rollup_depth_10() {
@@ -98,4 +99,62 @@ fn test_multi_branch_random_rollup_equivalence() {
     for (i, node) in arena.nodes.iter().enumerate() {
         assert_eq!(node.total_bytes, expected[i], "Mismatch at node {i}");
     }
+}
+
+#[test]
+fn test_zero_allocation_top_files_lifecycle() {
+    let mut arena = DirArena::new();
+    let root = arena.add_root(0, b"/data");
+    let sub = arena.add_node(root, 1, b"files");
+
+    let initial_names_len = arena.names.len();
+    let mut top = LocalTopFiles::new(20);
+
+    // Push 100,000 files with inline-sized names (<= 48 bytes)
+    for i in 1..=100_000u64 {
+        let name_str = format!("file_{i}.txt");
+        let name_bytes = name_str.as_bytes();
+        assert!(name_bytes.len() <= TOP_FILE_INLINE_MAX);
+        top.push(i, sub, name_bytes, &mut arena);
+    }
+
+    // Zero spill allocations in arena.names for inline files
+    assert_eq!(
+        arena.names.len(),
+        initial_names_len,
+        "Zero allocations expected for inline names"
+    );
+
+    // Min-heap contains exactly 20 largest files
+    assert_eq!(top.heap.len(), 20);
+    let mut extracted: Vec<_> = top.heap.into_iter().map(|Reverse(c)| c).collect();
+    extracted.sort_by_key(|c| c.size);
+
+    for (idx, cand) in extracted.iter().enumerate() {
+        let expected_size = 100_000 - 19 + (idx as u64);
+        assert_eq!(cand.size, expected_size);
+        assert_eq!(cand.is_spill, 0);
+
+        let mut path_buf = Vec::new();
+        arena.resolve_top_file_path(cand, &mut path_buf);
+        let expected_path = format!("/data/files/file_{expected_size}.txt");
+        assert_eq!(path_buf, expected_path.as_bytes());
+    }
+
+    // Test spill for names > 48 bytes
+    let mut top2 = LocalTopFiles::new(5);
+    let long_name = b"this_is_a_very_long_file_name_that_exceeds_forty_eight_bytes_long.dat";
+    assert!(long_name.len() > TOP_FILE_INLINE_MAX);
+
+    top2.push(5_000_000, sub, long_name, &mut arena);
+    assert_eq!(top2.heap.len(), 1);
+    let Reverse(cand) = top2.heap.peek().unwrap();
+    assert_eq!(cand.is_spill, 1);
+    assert_eq!(cand.size, 5_000_000);
+
+    let mut path_buf = Vec::new();
+    arena.resolve_top_file_path(cand, &mut path_buf);
+    let expected_long_path =
+        b"/data/files/this_is_a_very_long_file_name_that_exceeds_forty_eight_bytes_long.dat";
+    assert_eq!(path_buf, expected_long_path);
 }

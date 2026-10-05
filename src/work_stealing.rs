@@ -240,6 +240,57 @@ impl<T> Stealer<T> {
             Steal::Retry
         }
     }
+
+    /// Atomically steals up to `max_batch` tasks (typically half the victim's queue) in a single CAS.
+    /// Stolen tasks are directly transferred into the caller's `dest` worker deque.
+    /// Returns the number of items successfully stolen (0 if empty or CAS lost).
+    pub fn steal_batch(&self, dest: &Worker<T>, max_batch: usize) -> usize {
+        let max_cap = max_batch.clamp(1, 32);
+        let t = self.inner.top.load(Ordering::Acquire);
+        fence(Ordering::SeqCst);
+        let b = self.inner.bottom.load(Ordering::Acquire);
+
+        let size = b.wrapping_sub(t);
+        if size <= 0 {
+            return 0;
+        }
+
+        let count = ((size as usize) / 2).max(1).min(max_cap);
+        let a = self.inner.array.load(Ordering::Acquire);
+
+        let mut items: [MaybeUninit<T>; 32] = [const { MaybeUninit::uninit() }; 32];
+
+        for (i, item) in items.iter_mut().take(count).enumerate() {
+            let slot = t.wrapping_add(i as isize);
+            // SAFETY: slot is within [t, b) observed bounds.
+            let val = unsafe { (*a).read(slot) };
+            item.write(val);
+        }
+
+        let new_t = t.wrapping_add(count as isize);
+        if self
+            .inner
+            .top
+            .compare_exchange(t, new_t, Ordering::SeqCst, Ordering::Relaxed)
+            .is_ok()
+        {
+            // Push in reverse order so dest.pop() retrieves items in original FIFO order
+            for i in (0..count).rev() {
+                // SAFETY: Items 0..count were successfully claimed via atomic CAS.
+                let item = unsafe { items[i].assume_init_read() };
+                dest.push(item);
+            }
+            count
+        } else {
+            // Lost race: forget speculative reads to avoid double-free
+            for item in items.iter_mut().take(count) {
+                // SAFETY: Item was written in the loop above.
+                let val = unsafe { item.assume_init_read() };
+                std::mem::forget(val);
+            }
+            0
+        }
+    }
 }
 
 impl<T> Clone for Stealer<T> {
