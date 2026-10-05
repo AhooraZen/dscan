@@ -1,0 +1,26 @@
+[package]
+name = "dscan"
+version = "0.1.8"
+edition = "2024"
+authors = ["Ahoura <ahoura@parchlinux.com>"]
+description = "Ultra-fast, multi-threaded recursive disk space analyzer with a sleek neon TUI"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+keywords = ["disk", "du", "storage", "analyzer", "cli"]
+categories = ["command-line-utilities", "filesystem"]
+repository = "https://github.com/parchlinux/dscan"
+
+[lib]
+name = "dscan"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dscan"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
