@@ -68,10 +68,16 @@ impl CliOptions {
                     print_banner();
                     println!("\x1b[1mUsage:\x1b[0m dscan [TARGET_PATH] [OPTIONS]");
                     println!("\n\x1b[38;2;68;210;255mOptions:\x1b[0m");
-                    println!("  --exclude <PATTERN>   Exclude directory or pattern (e.g. --exclude .cache)");
-                    println!("  --top <N>             Show top N largest files/directories (default: 25)");
+                    println!(
+                        "  --exclude <PATTERN>   Exclude directory or pattern (e.g. --exclude .cache)"
+                    );
+                    println!(
+                        "  --top <N>             Show top N largest files/directories (default: 25)"
+                    );
                     println!("  --depth <N>           Max folder depth to aggregate (default: 3)");
-                    println!("  --threads, -j <N>     Number of parallel worker threads (default: 32)");
+                    println!(
+                        "  --threads, -j <N>     Number of parallel worker threads (default: 32)"
+                    );
                     println!("  -V, --version         Show version information");
                     println!("  -h, --help            Show this help menu");
                     return None;

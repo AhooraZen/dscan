@@ -12,11 +12,90 @@ use std::time::{Duration, Instant};
 
 use crate::cli::CliOptions;
 use crate::format::format_bytes;
-use crate::sys::{open_dir, LinuxDirent64, DT_DIR, DT_REG, DT_UNKNOWN, SYS_GETDENTS64};
-use crate::ui::{
-    clear_spinner_line, make_bar, render_spinner_line, C_BOLD, C_CYAN, C_DIM, C_GREEN, C_PURPLE,
-    C_RESET, C_YELLOW,
+use crate::sys::{
+    AT_STATX_DONT_SYNC, AT_SYMLINK_NOFOLLOW, DT_DIR, DT_LNK, DT_REG, DT_UNKNOWN, LinuxDirent64,
+    S_IFDIR, S_IFMT, S_IFREG, STATX_BLOCKS, STATX_TYPE, SYS_GETDENTS64, open_dir,
 };
+use crate::ui::{
+    C_BOLD, C_CYAN, C_DIM, C_GREEN, C_PURPLE, C_RESET, C_YELLOW, clear_spinner_line, make_bar,
+    render_spinner_line,
+};
+use crate::work_stealing::{Steal, Stealer, Worker, deque};
+
+pub struct AlignedBuffer {
+    ptr: *mut u8,
+    layout: std::alloc::Layout,
+    len: usize,
+}
+
+impl AlignedBuffer {
+    pub fn new(size: usize, align: usize) -> Self {
+        let layout = std::alloc::Layout::from_size_align(size, align).expect("valid layout");
+        // SAFETY: layout has non-zero size and valid power-of-two alignment.
+        let ptr = unsafe { std::alloc::alloc(layout) };
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        AlignedBuffer {
+            ptr,
+            layout,
+            len: size,
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: self.ptr points to an allocated buffer of self.len bytes.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+
+    #[inline(always)]
+    pub fn as_ptr(&self) -> *const u8 {
+        self.ptr
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Drop for AlignedBuffer {
+    fn drop(&mut self) {
+        // SAFETY: self.ptr was allocated with self.layout by std::alloc::alloc.
+        unsafe { std::alloc::dealloc(self.ptr, self.layout) };
+    }
+}
+
+// SAFETY: AlignedBuffer owns its heap allocation and can be transferred across threads.
+unsafe impl Send for AlignedBuffer {}
+
+#[repr(align(64))]
+pub struct CachePadded<T>(pub T);
+
+impl<T: Default> Default for CachePadded<T> {
+    fn default() -> Self {
+        Self(T::default())
+    }
+}
+
+impl<T> std::ops::Deref for CachePadded<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for CachePadded<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 pub struct ScanConfig {
     pub excludes: Vec<Vec<u8>>,
@@ -27,19 +106,22 @@ pub struct ScanConfig {
     pub threads: usize,
 }
 
-struct QueueState {
-    tasks: Vec<PathBuf>,
-}
-
 pub struct GlobalState {
     pub config: ScanConfig,
-    queue_mutex: Mutex<QueueState>,
-    queue_cvar: Condvar,
-    pub active_workers: AtomicUsize,
-    pub total_bytes: AtomicU64,
-    pub total_files: AtomicU64,
+    pub total_bytes: CachePadded<AtomicU64>,
+    pub total_files: CachePadded<AtomicU64>,
+    pub active_workers: CachePadded<AtomicUsize>,
+    pub done: CachePadded<AtomicBool>,
     pub current_active: Mutex<String>,
-    pub done: AtomicBool,
+    pub stealers: Vec<Stealer<PathBuf>>,
+    pub cvar: Condvar,
+    pub cvar_mutex: Mutex<()>,
+}
+
+impl GlobalState {
+    pub fn all_stealers_empty(&self) -> bool {
+        self.stealers.iter().all(|s| s.is_empty())
+    }
 }
 
 pub struct ThreadLocalResult {
@@ -59,46 +141,90 @@ pub struct ScanResult {
 }
 
 #[inline(always)]
-fn is_excluded_dir(path_bytes: &[u8], name_bytes: &[u8], excludes: &[Vec<u8>]) -> bool {
-    if name_bytes == b".git" {
-        return true;
-    }
+pub fn is_excluded_dir(path_bytes: &[u8], name_bytes: &[u8], excludes: &[Vec<u8>]) -> bool {
     for ex in excludes {
-        if path_bytes.windows(ex.len()).any(|w| w == ex.as_slice()) {
+        if ex.is_empty() {
+            continue;
+        }
+
+        let ex_slice = ex.as_slice();
+
+        // Exact name match (e.g. ".git", "target")
+        if name_bytes == ex_slice {
             return true;
+        }
+
+        // Absolute root prefix match (e.g. "/proc", "/sys", "/dev")
+        if ex_slice.starts_with(b"/") {
+            if path_bytes == ex_slice {
+                return true;
+            }
+            if path_bytes.starts_with(ex_slice) && path_bytes.get(ex_slice.len()) == Some(&b'/') {
+                return true;
+            }
+        } else {
+            // Relative folder match across components
+            if path_bytes
+                .split(|&b| b == b'/')
+                .any(|segment| segment == ex_slice)
+            {
+                return true;
+            }
         }
     }
     false
 }
 
+#[inline(always)]
+fn push_top_file(
+    top_files: &mut BinaryHeap<Reverse<(u64, PathBuf)>>,
+    limit: usize,
+    sz: u64,
+    build_path: impl FnOnce() -> PathBuf,
+) {
+    if top_files.len() < limit {
+        top_files.push(Reverse((sz, build_path())));
+    } else if let Some(Reverse((min_sz, _))) = top_files.peek()
+        && sz > *min_sz
+    {
+        top_files.pop();
+        top_files.push(Reverse((sz, build_path())));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn scan_directory_tree(
     dir_path: &Path,
     state: &Arc<GlobalState>,
-    buffer: &mut [u8],
+    worker: &Worker<PathBuf>,
+    buffer: &mut AlignedBuffer,
+    path_stack: &mut Vec<u8>,
     local_dirs: &mut HashMap<PathBuf, u64>,
     local_top_files: &mut BinaryHeap<Reverse<(u64, PathBuf)>>,
-    files_cnt: &mut u64,
-) -> u64 {
-    let mut total_dir_size: u64 = 0;
-    let dir_bytes = dir_path.as_os_str().as_bytes();
+    local_files: &mut u64,
+    local_bytes: &mut u64,
+) {
+    let mut local_dir_size: u64 = 0;
     let mut sub_dirs = Vec::new();
 
     let root_dev = state.config.root_dev;
-    let base_depth = state.config.base_depth;
-    let max_depth = state.config.max_depth;
     let top_limit = state.config.top_limit;
     let excludes = &state.config.excludes;
-    let threads = state.config.threads;
 
-    // Fast path: raw getdents64
+    let dir_bytes = dir_path.as_os_str().as_bytes();
+    path_stack.clear();
+    path_stack.extend_from_slice(dir_bytes);
+
     if let Some(fd) = open_dir(dir_path) {
+        let buf_slice = buffer.as_mut_slice();
         loop {
+            // SAFETY: fd is valid open directory descriptor, buffer is a valid aligned slice.
             let nread = unsafe {
                 crate::sys::syscall(
                     SYS_GETDENTS64,
                     fd as i64,
-                    buffer.as_mut_ptr() as i64,
-                    buffer.len() as i64,
+                    buf_slice.as_mut_ptr() as i64,
+                    buf_slice.len() as i64,
                 )
             };
 
@@ -110,12 +236,28 @@ fn scan_directory_tree(
             let nread = nread as usize;
 
             while pos < nread {
-                let dirent_ptr = unsafe { buffer.as_ptr().add(pos) as *const LinuxDirent64 };
-                let dirent = unsafe { *dirent_ptr };
+                if pos + std::mem::size_of::<LinuxDirent64>() > nread {
+                    break;
+                }
+
+                let dirent_ptr = unsafe { buf_slice.as_ptr().add(pos) as *const LinuxDirent64 };
+                // SAFETY: dirent_ptr is within buffer bounds; read_unaligned handles unaligned records safely.
+                let dirent = unsafe { std::ptr::read_unaligned(dirent_ptr) };
                 let reclen = dirent.d_reclen as usize;
 
-                let name_ptr = unsafe { buffer.as_ptr().add(pos + 19) as *const std::ffi::c_char };
-                let name_cstr = unsafe { CStr::from_ptr(name_ptr) };
+                if reclen < 19 || pos + reclen > nread {
+                    break;
+                }
+
+                let name_start = pos + 19;
+                let name_record_slice = &buf_slice[name_start..pos + reclen];
+                let name_cstr = match CStr::from_bytes_until_nul(name_record_slice) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        pos += reclen;
+                        continue;
+                    }
+                };
                 let name_bytes = name_cstr.to_bytes();
 
                 pos += reclen;
@@ -124,54 +266,125 @@ fn scan_directory_tree(
                     continue;
                 }
 
-                let d_type = dirent.d_type;
-
-                let mut full_path_bytes =
-                    Vec::with_capacity(dir_bytes.len() + 1 + name_bytes.len());
-                full_path_bytes.extend_from_slice(dir_bytes);
-                if !dir_bytes.ends_with(b"/") && dir_bytes != b"." {
-                    full_path_bytes.push(b'/');
-                } else if dir_bytes == b"." {
-                    full_path_bytes.clear();
+                if dir_bytes == b"." {
+                    path_stack.clear();
+                } else if !path_stack.ends_with(b"/") {
+                    path_stack.push(b'/');
                 }
-                full_path_bytes.extend_from_slice(name_bytes);
+                path_stack.extend_from_slice(name_bytes);
 
-                if is_excluded_dir(&full_path_bytes, name_bytes, excludes) {
+                if is_excluded_dir(path_stack, name_bytes, excludes) {
+                    path_stack.clear();
+                    path_stack.extend_from_slice(dir_bytes);
                     continue;
                 }
 
-                let item_path = if full_path_bytes.is_empty() {
-                    PathBuf::from(".")
-                } else {
-                    PathBuf::from(std::ffi::OsStr::from_bytes(&full_path_bytes))
-                };
-
-                if d_type == DT_DIR {
-                    sub_dirs.push(item_path);
-                } else if d_type == DT_REG || d_type == DT_UNKNOWN {
-                    if let Ok(meta) = item_path.symlink_metadata() {
-                        if meta.is_dir() {
-                            sub_dirs.push(item_path);
+                let d_type = dirent.d_type;
+                match d_type {
+                    DT_DIR => {
+                        // FAST PATH: Guaranteed directory. No stat syscall required.
+                        let child_path = if path_stack.is_empty() {
+                            PathBuf::from(".")
                         } else {
-                            *files_cnt += 1;
-                            if meta.dev() == root_dev {
-                                let sz = meta.blocks() * 512;
-                                total_dir_size += sz;
+                            PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
+                        };
+                        sub_dirs.push(child_path);
+                    }
+                    DT_REG => {
+                        // FAST PATH: Guaranteed regular file. Query only STATX_BLOCKS relative to dirfd.
+                        let mut stx = crate::sys::Statx::default();
+                        let res = crate::sys::sys_statx(
+                            fd,
+                            name_cstr.as_ptr(),
+                            AT_SYMLINK_NOFOLLOW | AT_STATX_DONT_SYNC,
+                            STATX_BLOCKS,
+                            &mut stx,
+                        );
+                        if res == 0 {
+                            let dev = crate::sys::makedev(stx.stx_dev_major, stx.stx_dev_minor);
+                            if dev == root_dev {
+                                let sz = stx.stx_blocks * 512;
+                                local_dir_size += sz;
+                                *local_files += 1;
+                                *local_bytes += sz;
 
-                                if local_top_files.len() < top_limit {
-                                    local_top_files.push(Reverse((sz, item_path)));
-                                } else if let Some(Reverse((min_sz, _))) = local_top_files.peek() {
-                                    if sz > *min_sz {
-                                        local_top_files.pop();
-                                        local_top_files.push(Reverse((sz, item_path)));
+                                if *local_files >= 1024 {
+                                    state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
+                                    state.total_files.fetch_add(*local_files, Ordering::Relaxed);
+                                    *local_bytes = 0;
+                                    *local_files = 0;
+                                }
+
+                                push_top_file(local_top_files, top_limit, sz, || {
+                                    if path_stack.is_empty() {
+                                        PathBuf::from(".")
+                                    } else {
+                                        PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
                                     }
+                                });
+                            }
+                        }
+                    }
+                    DT_UNKNOWN | DT_LNK => {
+                        // SLOW PATH: Symlink or unknown filesystem. Query STATX_TYPE | STATX_BLOCKS.
+                        let mut stx = crate::sys::Statx::default();
+                        let res = crate::sys::sys_statx(
+                            fd,
+                            name_cstr.as_ptr(),
+                            AT_SYMLINK_NOFOLLOW | AT_STATX_DONT_SYNC,
+                            STATX_TYPE | STATX_BLOCKS,
+                            &mut stx,
+                        );
+                        if res == 0 {
+                            let mode = stx.stx_mode;
+                            let file_type = mode & S_IFMT;
+                            if file_type == S_IFDIR {
+                                let child_path = if path_stack.is_empty() {
+                                    PathBuf::from(".")
+                                } else {
+                                    PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
+                                };
+                                sub_dirs.push(child_path);
+                            } else if file_type == S_IFREG {
+                                let dev = crate::sys::makedev(stx.stx_dev_major, stx.stx_dev_minor);
+                                if dev == root_dev {
+                                    let sz = stx.stx_blocks * 512;
+                                    local_dir_size += sz;
+                                    *local_files += 1;
+                                    *local_bytes += sz;
+
+                                    if *local_files >= 1024 {
+                                        state
+                                            .total_bytes
+                                            .fetch_add(*local_bytes, Ordering::Relaxed);
+                                        state
+                                            .total_files
+                                            .fetch_add(*local_files, Ordering::Relaxed);
+                                        *local_bytes = 0;
+                                        *local_files = 0;
+                                    }
+
+                                    push_top_file(local_top_files, top_limit, sz, || {
+                                        if path_stack.is_empty() {
+                                            PathBuf::from(".")
+                                        } else {
+                                            PathBuf::from(std::ffi::OsStr::from_bytes(path_stack))
+                                        }
+                                    });
                                 }
                             }
                         }
                     }
+                    _ => {
+                        // Sockets, FIFOs, character/block devices: skip
+                    }
                 }
+
+                path_stack.clear();
+                path_stack.extend_from_slice(dir_bytes);
             }
         }
+        // SAFETY: fd was opened by open_dir.
         unsafe { crate::sys::close(fd) };
     } else if let Ok(entries) = fs::read_dir(dir_path) {
         for entry in entries.flatten() {
@@ -186,117 +399,150 @@ fn scan_directory_tree(
             if let Ok(meta) = entry.metadata() {
                 if meta.is_dir() {
                     sub_dirs.push(path);
-                } else {
-                    *files_cnt += 1;
-                    if meta.dev() == root_dev {
-                        let sz = meta.blocks() * 512;
-                        total_dir_size += sz;
+                } else if meta.dev() == root_dev {
+                    let sz = meta.blocks() * 512;
+                    local_dir_size += sz;
+                    *local_files += 1;
+                    *local_bytes += sz;
 
-                        if local_top_files.len() < top_limit {
-                            local_top_files.push(Reverse((sz, path)));
-                        } else if let Some(Reverse((min_sz, _))) = local_top_files.peek() {
-                            if sz > *min_sz {
-                                local_top_files.pop();
-                                local_top_files.push(Reverse((sz, path)));
-                            }
-                        }
+                    if *local_files >= 1024 {
+                        state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
+                        state.total_files.fetch_add(*local_files, Ordering::Relaxed);
+                        *local_bytes = 0;
+                        *local_files = 0;
                     }
+
+                    push_top_file(local_top_files, top_limit, sz, || path);
                 }
             }
         }
     }
 
-    // Dynamic Work-Stealing at ANY depth when workers are idle
-    if sub_dirs.len() > 1 && state.active_workers.load(Ordering::Relaxed) < threads {
-        let mut q = state.queue_mutex.lock().unwrap();
+    *local_dirs.entry(dir_path.to_path_buf()).or_insert(0) += local_dir_size;
+
+    // Dynamic work-stealing offload to idle peers
+    if sub_dirs.len() > 1 && state.active_workers.load(Ordering::Relaxed) < state.config.threads {
         let half = sub_dirs.split_off(sub_dirs.len() / 2);
         for d in half {
-            q.tasks.push(d);
+            worker.push(d);
         }
-        state.queue_cvar.notify_all();
+        state.cvar.notify_all();
     }
 
     for sub in sub_dirs {
-        let child_size = scan_directory_tree(
+        scan_directory_tree(
             &sub,
             state,
+            worker,
             buffer,
+            path_stack,
             local_dirs,
             local_top_files,
-            files_cnt,
+            local_files,
+            local_bytes,
         );
-        total_dir_size += child_size;
     }
-
-    let cur_depth = dir_path.components().count();
-    let rel_depth = cur_depth.saturating_sub(base_depth);
-    if rel_depth <= max_depth {
-        *local_dirs.entry(dir_path.to_path_buf()).or_insert(0) += total_dir_size;
-    }
-
-    total_dir_size
 }
 
-fn worker_loop(state: Arc<GlobalState>) -> ThreadLocalResult {
+fn worker_loop(
+    thread_id: usize,
+    worker: Worker<PathBuf>,
+    state: Arc<GlobalState>,
+) -> ThreadLocalResult {
     let mut local_dirs: HashMap<PathBuf, u64> = HashMap::with_capacity(4096);
     let mut local_top_files: BinaryHeap<Reverse<(u64, PathBuf)>> =
         BinaryHeap::with_capacity(state.config.top_limit + 10);
-    let mut heap_buffer = vec![0u8; 65536];
+    let mut aligned_buffer = AlignedBuffer::new(512 * 1024, 4096);
+    let mut path_stack = Vec::with_capacity(4096);
+    let mut local_files: u64 = 0;
+    let mut local_bytes: u64 = 0;
 
-    let mut local_files_cnt: u64 = 0;
+    let mut is_active = thread_id == 0;
+    let num_stealers = state.stealers.len();
 
     loop {
-        let task = {
-            let mut q = state.queue_mutex.lock().unwrap();
-            while q.tasks.is_empty() {
-                if state.active_workers.load(Ordering::SeqCst) == 0 {
-                    state.queue_cvar.notify_all();
-                    return ThreadLocalResult {
-                        dir_sizes: local_dirs,
-                        top_files: local_top_files,
-                    };
-                }
-                let (new_q, timeout_res) = state
-                    .queue_cvar
-                    .wait_timeout(q, Duration::from_millis(5))
-                    .unwrap();
-                q = new_q;
-                if timeout_res.timed_out()
-                    && q.tasks.is_empty()
-                    && state.active_workers.load(Ordering::SeqCst) == 0
-                {
-                    state.queue_cvar.notify_all();
-                    return ThreadLocalResult {
-                        dir_sizes: local_dirs,
-                        top_files: local_top_files,
-                    };
+        // 1. Try local worker deque (LIFO)
+        let task = if let Some(t) = worker.pop() {
+            Some(t)
+        } else {
+            // 2. Try stealing from peers (FIFO)
+            let mut stolen = None;
+            for offset in 1..num_stealers {
+                let target_idx = (thread_id + offset) % num_stealers;
+                match state.stealers[target_idx].steal() {
+                    Steal::Success(t) => {
+                        stolen = Some(t);
+                        break;
+                    }
+                    Steal::Retry | Steal::Empty => continue,
                 }
             }
-            q.tasks.pop()
+            stolen
         };
 
         if let Some(current_dir) = task {
-            state.active_workers.fetch_add(1, Ordering::SeqCst);
+            if !is_active {
+                state.active_workers.fetch_add(1, Ordering::SeqCst);
+                is_active = true;
+            }
+
             if let Ok(mut act) = state.current_active.try_lock() {
                 *act = current_dir.to_string_lossy().to_string();
             }
 
-            let tree_sz = scan_directory_tree(
+            scan_directory_tree(
                 &current_dir,
                 &state,
-                &mut heap_buffer,
+                &worker,
+                &mut aligned_buffer,
+                &mut path_stack,
                 &mut local_dirs,
                 &mut local_top_files,
-                &mut local_files_cnt,
+                &mut local_files,
+                &mut local_bytes,
             );
 
-            state.total_bytes.fetch_add(tree_sz, Ordering::Relaxed);
-            state.total_files.fetch_add(local_files_cnt, Ordering::Relaxed);
-            local_files_cnt = 0;
+            // Flush remaining batched counts on directory completion
+            if local_files > 0 {
+                state.total_bytes.fetch_add(local_bytes, Ordering::Relaxed);
+                state.total_files.fetch_add(local_files, Ordering::Relaxed);
+                local_bytes = 0;
+                local_files = 0;
+            }
+        } else {
+            // No task available
+            if is_active {
+                state.active_workers.fetch_sub(1, Ordering::SeqCst);
+                is_active = false;
+            }
 
-            state.active_workers.fetch_sub(1, Ordering::SeqCst);
-            state.queue_cvar.notify_all();
+            if state.done.load(Ordering::SeqCst) {
+                break;
+            }
+
+            if state.active_workers.load(Ordering::SeqCst) == 0 && state.all_stealers_empty() {
+                state.done.store(true, Ordering::SeqCst);
+                state.cvar.notify_all();
+                break;
+            }
+
+            // Wait for work notification or timeout
+            let guard = state.cvar_mutex.lock().unwrap();
+            if state.done.load(Ordering::SeqCst) {
+                break;
+            }
+            if state.active_workers.load(Ordering::SeqCst) == 0 && state.all_stealers_empty() {
+                state.done.store(true, Ordering::SeqCst);
+                state.cvar.notify_all();
+                break;
+            }
+            let _ = state.cvar.wait_timeout(guard, Duration::from_millis(1));
         }
+    }
+
+    ThreadLocalResult {
+        dir_sizes: local_dirs,
+        top_files: local_top_files,
     }
 }
 
@@ -312,7 +558,19 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
         .map(|s| s.as_bytes().to_vec())
         .collect();
 
-    let initial_dirs = vec![root.to_path_buf()];
+    let num_threads = options.threads.max(1);
+
+    let mut workers = Vec::with_capacity(num_threads);
+    let mut stealers = Vec::with_capacity(num_threads);
+
+    for _ in 0..num_threads {
+        let (w, s) = deque::<PathBuf>();
+        workers.push(w);
+        stealers.push(s);
+    }
+
+    // Push initial root directory to worker 0
+    workers[0].push(root.to_path_buf());
 
     let state = Arc::new(GlobalState {
         config: ScanConfig {
@@ -321,17 +579,16 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
             base_depth,
             max_depth: options.max_depth,
             top_limit: options.top_limit,
-            threads: options.threads,
+            threads: num_threads,
         },
-        queue_mutex: Mutex::new(QueueState {
-            tasks: initial_dirs,
-        }),
-        queue_cvar: Condvar::new(),
-        active_workers: AtomicUsize::new(0),
-        total_bytes: AtomicU64::new(0),
-        total_files: AtomicU64::new(0),
+        stealers,
+        active_workers: CachePadded(AtomicUsize::new(1)),
+        total_bytes: CachePadded(AtomicU64::new(0)),
+        total_files: CachePadded(AtomicU64::new(0)),
+        done: CachePadded(AtomicBool::new(false)),
         current_active: Mutex::new(String::new()),
-        done: AtomicBool::new(false),
+        cvar: Condvar::new(),
+        cvar_mutex: Mutex::new(()),
     });
 
     let start_time = Instant::now();
@@ -354,13 +611,13 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
         }
     });
 
-    let mut handles = Vec::with_capacity(options.threads);
-    for _ in 0..options.threads {
+    let mut handles = Vec::with_capacity(num_threads);
+    for (i, w) in workers.into_iter().enumerate() {
         let state_clone = Arc::clone(&state);
-        handles.push(thread::spawn(move || worker_loop(state_clone)));
+        handles.push(thread::spawn(move || worker_loop(i, w, state_clone)));
     }
 
-    let mut all_results = Vec::with_capacity(options.threads);
+    let mut all_results = Vec::with_capacity(num_threads);
     for h in handles {
         if let Ok(res) = h.join() {
             all_results.push(res);
@@ -368,6 +625,7 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
     }
 
     state.done.store(true, Ordering::SeqCst);
+    state.cvar.notify_all();
     let _ = rep_handle.join();
 
     let elapsed = start_time.elapsed();
@@ -376,27 +634,61 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
 
     clear_spinner_line();
 
-    // Merge Thread-Local Results
-    let mut final_dirs: HashMap<PathBuf, u64> = HashMap::new();
+    // Merge Thread-Local Results and hierarchical bottom-up rollup
+    let mut raw_dirs: HashMap<PathBuf, u64> = HashMap::new();
     let mut final_top_files: BinaryHeap<Reverse<(u64, PathBuf)>> = BinaryHeap::new();
 
     for res in all_results {
         for (k, v) in res.dir_sizes {
-            *final_dirs.entry(k).or_insert(0) += v;
+            *raw_dirs.entry(k).or_insert(0) += v;
         }
         for item in res.top_files {
             final_top_files.push(item);
         }
     }
 
+    let max_depth = options.max_depth;
+    let mut final_dirs: HashMap<PathBuf, u64> = HashMap::new();
+
+    // Ensure all scanned directories with rel_depth <= max_depth exist in final_dirs
+    for dir in raw_dirs.keys() {
+        let cur_depth = dir.components().count();
+        let rel_depth = cur_depth.saturating_sub(base_depth);
+        if rel_depth <= max_depth {
+            final_dirs.entry(dir.clone()).or_insert(0);
+        }
+    }
+
+    // Hierarchical bottom-up rollup: add each directory's shallow file size to all its ancestors
+    for (dir, direct_sz) in &raw_dirs {
+        if *direct_sz == 0 {
+            continue;
+        }
+        let mut curr: &Path = dir;
+        loop {
+            let cur_depth = curr.components().count();
+            if cur_depth < base_depth {
+                break;
+            }
+            let rel_depth = cur_depth.saturating_sub(base_depth);
+            if rel_depth <= max_depth {
+                *final_dirs.entry(curr.to_path_buf()).or_insert(0) += *direct_sz;
+            }
+            match curr.parent() {
+                Some(p) => curr = p,
+                None => break,
+            }
+        }
+    }
+
     let mut sorted_dirs: Vec<(PathBuf, u64)> = final_dirs.into_iter().collect();
-    sorted_dirs.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_dirs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     let max_dir_size = sorted_dirs.first().map(|(_, s)| *s).unwrap_or(1).max(1);
 
     let mut files_vec: Vec<(u64, PathBuf)> =
         final_top_files.into_iter().map(|Reverse(x)| x).collect();
-    files_vec.sort_by(|a, b| b.0.cmp(&a.0));
+    files_vec.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     files_vec.dedup_by(|a, b| a.1 == b.1);
 
     let max_file_size = files_vec.first().map(|(s, _)| *s).unwrap_or(1).max(1);
@@ -413,17 +705,23 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
 }
 
 pub fn print_report(result: &ScanResult) {
-    println!("{C_BOLD}{C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮{C_RESET}");
+    println!(
+        "{C_BOLD}{C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮{C_RESET}"
+    );
     println!(
         "{C_BOLD}{C_GREEN}│  {C_CYAN}✔ Scan Finished in {C_YELLOW}{:.2?}{C_CYAN}  │  Total Used: {C_YELLOW}{:<11}{C_CYAN}  │  Files: {C_YELLOW}{:<9}{C_GREEN}│{C_RESET}",
         result.elapsed,
         format_bytes(result.total_bytes),
         result.total_files
     );
-    println!("{C_BOLD}{C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯{C_RESET}\n");
+    println!(
+        "{C_BOLD}{C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯{C_RESET}\n"
+    );
 
     println!("{C_BOLD}{C_CYAN}📁 Top Directories By Recursive Size:{C_RESET}");
-    println!("{C_DIM}────────────────────────────────────────────────────────────────────────────────{C_RESET}");
+    println!(
+        "{C_DIM}────────────────────────────────────────────────────────────────────────────────{C_RESET}"
+    );
 
     if result.top_dirs.is_empty() {
         println!("  {C_DIM}(no subdirectories found){C_RESET}");
@@ -441,7 +739,9 @@ pub fn print_report(result: &ScanResult) {
     }
 
     println!("\n{C_BOLD}{C_PURPLE}📄 Top Largest Files:{C_RESET}");
-    println!("{C_DIM}────────────────────────────────────────────────────────────────────────────────{C_RESET}");
+    println!(
+        "{C_DIM}────────────────────────────────────────────────────────────────────────────────{C_RESET}"
+    );
 
     if result.top_files.is_empty() {
         println!("  {C_DIM}(no files found){C_RESET}");
@@ -458,4 +758,136 @@ pub fn print_report(result: &ScanResult) {
         }
     }
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_excluded_dir() {
+        let excludes = vec![
+            b".git".to_vec(),
+            b"/proc".to_vec(),
+            b"/sys".to_vec(),
+            b"/dev".to_vec(),
+            b"/run".to_vec(),
+        ];
+
+        // 1. Exact name match
+        assert!(is_excluded_dir(b"/home/user/.git", b".git", &excludes));
+
+        // 2. Relative component match
+        assert!(is_excluded_dir(
+            b"/home/user/project/.git/objects",
+            b"objects",
+            &excludes
+        ));
+
+        // 3. Root prefix match
+        assert!(is_excluded_dir(b"/dev/shm", b"shm", &excludes));
+
+        // 4. Root prefix exact
+        assert!(is_excluded_dir(b"/dev", b"dev", &excludes));
+
+        // 5. Substring non-match: /home/user/development is NOT excluded by /dev
+        assert!(!is_excluded_dir(
+            b"/home/user/development/code",
+            b"code",
+            &excludes
+        ));
+
+        // 6. Substring non-match: /home/user/runner/job is NOT excluded by /run
+        assert!(!is_excluded_dir(
+            b"/home/user/runner/job",
+            b"job",
+            &excludes
+        ));
+
+        // 7. Substring non-match: /home/user/system_monitor is NOT excluded by /sys
+        assert!(!is_excluded_dir(
+            b"/home/user/system_monitor",
+            b"system_monitor",
+            &excludes
+        ));
+
+        // 8. Empty pattern
+        assert!(!is_excluded_dir(b"/home/user/safe", b"safe", &[]));
+    }
+
+    #[test]
+    fn test_aligned_buffer() {
+        let mut buf = AlignedBuffer::new(512 * 1024, 4096);
+        assert_eq!(buf.len(), 512 * 1024);
+        assert!(!buf.is_empty());
+        assert_eq!((buf.as_ptr() as usize) % 4096, 0);
+
+        let slice = buf.as_mut_slice();
+        slice[0] = 0xAA;
+        slice[512 * 1024 - 1] = 0xBB;
+        assert_eq!(slice[0], 0xAA);
+        assert_eq!(slice[512 * 1024 - 1], 0xBB);
+    }
+
+    #[test]
+    fn test_cache_padded_align() {
+        assert_eq!(std::mem::align_of::<CachePadded<AtomicU64>>(), 64);
+        let padded = CachePadded(AtomicU64::new(42));
+        assert_eq!(padded.load(Ordering::Relaxed), 42);
+    }
+
+    #[test]
+    fn test_scan_tree_and_rollup() {
+        let temp_dir = std::env::temp_dir().join(format!("dscan_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(temp_dir.join("parent/child1")).unwrap();
+        fs::create_dir_all(temp_dir.join("parent/child2")).unwrap();
+
+        fs::write(temp_dir.join("parent/child1/file1.bin"), vec![1u8; 8192]).unwrap();
+        fs::write(temp_dir.join("parent/child2/file2.bin"), vec![2u8; 16384]).unwrap();
+
+        let options = CliOptions {
+            target_path: temp_dir.to_str().unwrap().to_string(),
+            top_limit: 10,
+            max_depth: 3,
+            threads: 4,
+            excludes: vec![],
+        };
+
+        let result = run_scan(&options).expect("run_scan failed");
+        assert!(result.total_files >= 2);
+        assert!(result.total_bytes >= 24576);
+
+        // Verify parent directory size is >= child1 + child2
+        let parent_path = temp_dir.join("parent");
+        let parent_entry = result.top_dirs.iter().find(|(p, _)| p == &parent_path);
+        assert!(
+            parent_entry.is_some(),
+            "parent directory missing from top_dirs"
+        );
+        let parent_sz = parent_entry.unwrap().1;
+
+        let child1_path = temp_dir.join("parent/child1");
+        let child1_sz = result
+            .top_dirs
+            .iter()
+            .find(|(p, _)| p == &child1_path)
+            .map(|(_, s)| *s)
+            .unwrap_or(0);
+
+        let child2_path = temp_dir.join("parent/child2");
+        let child2_sz = result
+            .top_dirs
+            .iter()
+            .find(|(p, _)| p == &child2_path)
+            .map(|(_, s)| *s)
+            .unwrap_or(0);
+
+        assert!(
+            parent_sz >= child1_sz + child2_sz,
+            "parent_sz ({parent_sz}) must be >= child1 ({child1_sz}) + child2 ({child2_sz})"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
