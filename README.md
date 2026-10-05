@@ -1,22 +1,24 @@
 # dscan
 
-Fast, multi-threaded disk usage analyzer for Linux. It scans large filesystems using raw kernel syscalls and displays directory sizes with accurate recursive rollups in your terminal.
+Fast, multi-threaded disk usage analyzer for Linux and Windows. It scans directory trees using raw operating system syscalls and displays directory sizes with accurate recursive rollups in your terminal.
 
-Zero external dependencies, instant compilation, and faster than GNU `du` on large directory trees.
+Zero external dependencies, fast compilation, and faster than GNU `du` on large directory trees.
 
 ---
 
 ## Why dscan
 
-Most disk space tools either wrap standard library `readdir` or introduce heavy dependency trees. Standard POSIX traversal issues individual `stat` calls per file, which burns time in VFS path resolution and page cache sync locks.
+Most disk space tools either wrap standard library `readdir` or pull in heavy dependency trees. Standard POSIX or Win32 traversal issues individual `stat` or `GetFileAttributesExW` calls for every file, burning time in path resolution, permission checks, and page cache locks.
 
-`dscan` bypasses libc overhead completely:
-- Raw `getdents64` calls with 512 KiB page-aligned buffers to read directory entries in bulk.
-- Kernel `statx` with `AT_STATX_DONT_SYNC` relative to open directory file descriptors to fetch block counts without filesystem sync stalls.
-- Lock-free Chase-Lev work-stealing circular deques per worker thread, eliminating mutex lock contention across cores.
-- Bottom-up hierarchical size rollup so parent directory totals always reflect their full subtrees accurately.
-- Responsive terminal UI that dynamically sizes borders, progress bars, and path truncations to fit anything from phone screens (Termux) to wide monitors without text wrapping.
-- Zero external dependencies. Built entirely with Rust stdlib and raw Linux system calls.
+`dscan` bypasses standard library overhead:
+- **Linux**: Direct `getdents64` calls with 512 KiB page-aligned buffers to read directory entries in bulk.
+- **Linux**: Kernel `statx` with `AT_STATX_DONT_SYNC` relative to directory file descriptors, fetching block counts without filesystem sync stalls.
+- **Windows**: Bulk directory queries via `GetFileInformationByHandleEx` with `FileIdBothDirectoryInfo`, reading `AllocationSize` directly from directory records with zero secondary stat calls.
+- **Windows**: Automatic reparse point detection to avoid recursive junction loops.
+- **Concurrency**: Lock-free Chase-Lev work-stealing circular deques per worker thread, eliminating mutex lock contention across cores.
+- **Accuracy**: Bottom-up hierarchical size rollup so parent directory totals always reflect their full subtrees.
+- **Terminal UI**: Responsive ANSI layout that dynamically sizes borders, progress bars, and path truncations to fit anything from phone screens (Termux) to wide monitors without line wrapping.
+- **Zero Dependencies**: Built entirely with the Rust standard library and raw OS platform interfaces.
 
 ---
 
@@ -34,8 +36,9 @@ Or build from source:
 git clone https://github.com/parchlinux/dscan.git
 cd dscan
 cargo build --release
-sudo cp target/release/dscan /usr/local/bin/
 ```
+
+Binary will be at `target/release/dscan` (or `target/release/dscan.exe` on Windows).
 
 ---
 
@@ -63,7 +66,7 @@ dscan /data -j 8
 | Flag | Description | Default |
 | --- | --- | --- |
 | `TARGET_PATH` | Path to scan | `.` (current directory) |
-| `--exclude <PATTERN>` | Path or folder name to skip (e.g. `--exclude .cache`) | `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `.git` |
+| `--exclude <PATTERN>` | Path or folder name to skip (e.g. `--exclude .cache`) | System defaults (`/proc`, `/sys`, etc. on Linux; `$Recycle.Bin`, etc. on Windows) |
 | `--top <N>` | Number of largest directories and files to show | `25` |
 | `--depth <N>` | Maximum directory depth to display (`0` or omitted = unlimited) | unlimited |
 | `-j`, `--threads <N>` | Number of parallel worker threads | CPU core count (max 32) |
