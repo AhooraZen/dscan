@@ -1,8 +1,11 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
+#[cfg(unix)]
 use std::ffi::CStr;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -11,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::cli::CliOptions;
+#[cfg(unix)]
 use crate::sys::{
     AT_STATX_DONT_SYNC, AT_SYMLINK_NOFOLLOW, DT_DIR, DT_LNK, DT_REG, DT_UNKNOWN, LinuxDirent64,
     S_IFDIR, S_IFMT, S_IFREG, STATX_BLOCKS, STATX_TYPE, SYS_GETDENTS64, open_dir,
@@ -190,6 +194,7 @@ fn push_top_file(
     }
 }
 
+#[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
 fn scan_directory_tree(
     dir_path: &Path,
@@ -458,6 +463,197 @@ fn scan_directory_tree(
     }
 }
 
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn scan_directory_tree_windows(
+    dir_path: &Path,
+    state: &Arc<GlobalState>,
+    worker: &Worker<PathBuf>,
+    buffer: &mut AlignedBuffer,
+    local_dirs: &mut HashMap<PathBuf, u64>,
+    local_top_files: &mut BinaryHeap<Reverse<(u64, PathBuf)>>,
+    local_files: &mut u64,
+    local_bytes: &mut u64,
+) {
+    use crate::sys::*;
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    let mut local_dir_size: u64 = 0;
+    let mut sub_dirs = Vec::new();
+
+    let root_dev = state.config.root_dev;
+    let top_limit = state.config.top_limit;
+    let excludes = &state.config.excludes;
+
+    if let Some(h_dir) = open_dir(dir_path) {
+        if !state.config.cross_filesystems {
+            if let Some(vol) = get_volume_serial_number(h_dir) {
+                if vol != root_dev {
+                    close_handle(h_dir);
+                    return;
+                }
+            }
+        }
+
+        let buf_slice = buffer.as_mut_slice();
+        let buf_ptr = buf_slice.as_mut_ptr() as *mut std::ffi::c_void;
+        let buf_len = buf_slice.len() as u32;
+
+        loop {
+            // SAFETY: h_dir is a valid directory handle opened with FILE_FLAG_BACKUP_SEMANTICS,
+            // buf_ptr is a valid aligned buffer pointer.
+            let ret = unsafe {
+                GetFileInformationByHandleEx(h_dir, FILE_ID_BOTH_DIRECTORY_INFO, buf_ptr, buf_len)
+            };
+
+            if ret == 0 {
+                break;
+            }
+
+            let mut offset = 0usize;
+            loop {
+                if offset + std::mem::size_of::<FileIdBothDirInfo>() > buf_slice.len() {
+                    break;
+                }
+
+                let entry_ptr =
+                    unsafe { (buf_ptr as *const u8).add(offset) as *const FileIdBothDirInfo };
+                // SAFETY: read_unaligned prevents unaligned memory faults from misaligned filesystem records.
+                let entry = unsafe { std::ptr::read_unaligned(entry_ptr) };
+
+                let name_len_bytes = entry.file_name_length as usize;
+                let name_len_wchars = name_len_bytes / std::mem::size_of::<u16>();
+
+                let fn_offset = std::mem::offset_of!(FileIdBothDirInfo, file_name);
+                if offset + fn_offset + name_len_bytes > buf_slice.len() {
+                    break;
+                }
+
+                let file_name_ptr =
+                    unsafe { (entry_ptr as *const u8).add(fn_offset) as *const u16 };
+
+                let name_slice =
+                    unsafe { std::slice::from_raw_parts(file_name_ptr, name_len_wchars) };
+
+                let is_dot = name_slice == [b'.' as u16];
+                let is_dotdot = name_slice == [b'.' as u16, b'.' as u16];
+
+                if !is_dot && !is_dotdot {
+                    let os_name = OsString::from_wide(name_slice);
+                    let child_path = dir_path.join(&os_name);
+                    let child_path_str = child_path.to_string_lossy();
+
+                    let mut excluded = false;
+                    for exc in excludes {
+                        let exc_str = String::from_utf8_lossy(exc);
+                        if child_path_str.ends_with(exc_str.as_ref())
+                            || os_name == exc_str.as_ref()
+                        {
+                            excluded = true;
+                            break;
+                        }
+                    }
+
+                    if !excluded {
+                        let attrs = entry.file_attributes;
+                        let is_dir = (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+                        let is_reparse = (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+
+                        if is_dir {
+                            if !is_reparse || state.config.follow_symlinks {
+                                sub_dirs.push(child_path);
+                            }
+                        } else {
+                            // Regular file: AllocationSize gives actual disk cluster allocation!
+                            let sz = if entry.allocation_size > 0 {
+                                entry.allocation_size as u64
+                            } else {
+                                entry.end_of_file.max(0) as u64
+                            };
+
+                            local_dir_size += sz;
+                            *local_files += 1;
+                            *local_bytes += sz;
+
+                            if *local_files >= 1024 {
+                                state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
+                                state.total_files.fetch_add(*local_files, Ordering::Relaxed);
+                                *local_bytes = 0;
+                                *local_files = 0;
+                            }
+
+                            push_top_file(local_top_files, top_limit, sz, || child_path);
+                        }
+                    }
+                }
+
+                if entry.next_entry_offset == 0
+                    || offset + (entry.next_entry_offset as usize) >= buf_slice.len()
+                {
+                    break;
+                }
+                offset += entry.next_entry_offset as usize;
+            }
+        }
+
+        close_handle(h_dir);
+    } else if let Ok(entries) = fs::read_dir(dir_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let p_bytes = path.to_string_lossy().as_bytes().to_vec();
+            let name_bytes = entry.file_name().to_string_lossy().as_bytes().to_vec();
+
+            if is_excluded_dir(&p_bytes, &name_bytes, excludes) {
+                continue;
+            }
+
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_dir() {
+                    sub_dirs.push(path);
+                } else {
+                    let sz = meta.len();
+                    local_dir_size += sz;
+                    *local_files += 1;
+                    *local_bytes += sz;
+
+                    if *local_files >= 1024 {
+                        state.total_bytes.fetch_add(*local_bytes, Ordering::Relaxed);
+                        state.total_files.fetch_add(*local_files, Ordering::Relaxed);
+                        *local_bytes = 0;
+                        *local_files = 0;
+                    }
+
+                    push_top_file(local_top_files, top_limit, sz, || path);
+                }
+            }
+        }
+    }
+
+    *local_dirs.entry(dir_path.to_path_buf()).or_insert(0) += local_dir_size;
+
+    if sub_dirs.len() > 1 && state.active_workers.load(Ordering::Relaxed) < state.config.threads {
+        let half = sub_dirs.split_off(sub_dirs.len() / 2);
+        for d in half {
+            worker.push(d);
+        }
+        state.cvar.notify_all();
+    }
+
+    for sub in sub_dirs {
+        scan_directory_tree_windows(
+            &sub,
+            state,
+            worker,
+            buffer,
+            local_dirs,
+            local_top_files,
+            local_files,
+            local_bytes,
+        );
+    }
+}
+
 fn worker_loop(
     thread_id: usize,
     worker: Worker<PathBuf>,
@@ -467,6 +663,7 @@ fn worker_loop(
     let mut local_top_files: BinaryHeap<Reverse<(u64, PathBuf)>> =
         BinaryHeap::with_capacity(state.config.top_limit + 10);
     let mut aligned_buffer = AlignedBuffer::new(512 * 1024, 4096);
+    #[cfg(unix)]
     let mut path_stack = Vec::with_capacity(4096);
     let mut local_files: u64 = 0;
     let mut local_bytes: u64 = 0;
@@ -504,12 +701,25 @@ fn worker_loop(
                 *act = current_dir.to_string_lossy().to_string();
             }
 
+            #[cfg(unix)]
             scan_directory_tree(
                 &current_dir,
                 &state,
                 &worker,
                 &mut aligned_buffer,
                 &mut path_stack,
+                &mut local_dirs,
+                &mut local_top_files,
+                &mut local_files,
+                &mut local_bytes,
+            );
+
+            #[cfg(windows)]
+            scan_directory_tree_windows(
+                &current_dir,
+                &state,
+                &worker,
+                &mut aligned_buffer,
                 &mut local_dirs,
                 &mut local_top_files,
                 &mut local_files,
@@ -563,7 +773,22 @@ fn worker_loop(
 pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
     let root = Path::new(&options.target_path);
     let root_meta = root.metadata()?;
-    let root_dev = root_meta.dev();
+    #[cfg(unix)]
+    let root_dev = {
+        use std::os::unix::fs::MetadataExt;
+        root_meta.dev()
+    };
+    #[cfg(windows)]
+    let root_dev = {
+        let _ = &root_meta;
+        if let Some(h) = crate::sys::open_dir(root) {
+            let dev = crate::sys::get_volume_serial_number(h).unwrap_or(0);
+            crate::sys::close_handle(h);
+            dev
+        } else {
+            0
+        }
+    };
     let base_depth = root.components().count();
 
     let excludes_bytes: Vec<Vec<u8>> = options
