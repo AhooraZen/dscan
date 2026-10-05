@@ -488,6 +488,7 @@ mod tests {
             excludes: vec![],
             follow_symlinks: false,
             cross_filesystems: false,
+            collect_ext_stats: true,
         };
 
         let session = ScanSession::start(opts).expect("ScanSession should start");

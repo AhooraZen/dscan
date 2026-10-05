@@ -1,6 +1,6 @@
 [package]
 name = "dscan-gui"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 authors = ["AhooraZen <ahoora935137@gmail.com>"]
 description = "Tauri v2 WinDirStat cushion treemap visualizer for dscan"

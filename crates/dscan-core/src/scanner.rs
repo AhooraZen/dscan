@@ -32,6 +32,7 @@ pub struct ScanOptions {
     pub threads: usize,
     pub follow_symlinks: bool,
     pub cross_filesystems: bool,
+    pub collect_ext_stats: bool,
 }
 
 pub type CliOptions = ScanOptions;
@@ -57,9 +58,8 @@ impl Default for ScanOptions {
             "dumpstack.log.sys".to_string(),
         ];
         let threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(8)
-            .clamp(2, 32);
+            .map(|n| (n.get() * 2).clamp(4, 64))
+            .unwrap_or(16);
 
         Self {
             target_path: ".".to_string(),
@@ -69,6 +69,7 @@ impl Default for ScanOptions {
             threads,
             follow_symlinks: false,
             cross_filesystems: false,
+            collect_ext_stats: false,
         }
     }
 }
@@ -353,6 +354,7 @@ pub struct ScanConfig {
     pub threads: usize,
     pub follow_symlinks: bool,
     pub cross_filesystems: bool,
+    pub collect_ext_stats: bool,
 }
 
 pub struct GlobalState {
@@ -439,7 +441,11 @@ fn record_file_ext(
     ext_stats: &mut std::collections::HashMap<String, (u64, u64)>,
     name_bytes: &[u8],
     file_size: u64,
+    collect: bool,
 ) {
+    if !collect {
+        return;
+    }
     let ext = extract_file_extension(name_bytes);
     let entry = ext_stats.entry(ext).or_insert((0, 0));
     entry.0 += file_size;
@@ -506,7 +512,12 @@ fn flush_statx_batch(
                 let name_bytes = &batch.name_bufs[idx][..name_len];
 
                 local_top_files.push(sz, current_node, name_bytes, local_arena);
-                record_file_ext(local_ext_stats, name_bytes, sz);
+                record_file_ext(
+                    local_ext_stats,
+                    name_bytes,
+                    sz,
+                    state.config.collect_ext_stats,
+                );
             }
             reaped += 1;
         });
@@ -696,7 +707,12 @@ fn scan_directory_tree(
                                     local_dir_size += sz;
                                     record_file_stat(local_files, local_bytes, sz, state);
                                     local_top_files.push(sz, current_node, name_bytes, local_arena);
-                                    record_file_ext(local_ext_stats, name_bytes, sz);
+                                    record_file_ext(
+                                        local_ext_stats,
+                                        name_bytes,
+                                        sz,
+                                        state.config.collect_ext_stats,
+                                    );
                                 }
                             }
                         } else {
@@ -724,7 +740,12 @@ fn scan_directory_tree(
                                 local_dir_size += sz;
                                 record_file_stat(local_files, local_bytes, sz, state);
                                 local_top_files.push(sz, current_node, name_bytes, local_arena);
-                                record_file_ext(local_ext_stats, name_bytes, sz);
+                                record_file_ext(
+                                    local_ext_stats,
+                                    name_bytes,
+                                    sz,
+                                    state.config.collect_ext_stats,
+                                );
                             }
                         }
 
@@ -745,7 +766,12 @@ fn scan_directory_tree(
                                 local_dir_size += sz;
                                 record_file_stat(local_files, local_bytes, sz, state);
                                 local_top_files.push(sz, current_node, name_bytes, local_arena);
-                                record_file_ext(local_ext_stats, name_bytes, sz);
+                                record_file_ext(
+                                    local_ext_stats,
+                                    name_bytes,
+                                    sz,
+                                    state.config.collect_ext_stats,
+                                );
                             }
                         }
                     }
@@ -777,7 +803,12 @@ fn scan_directory_tree(
                                 local_dir_size += sz;
                                 record_file_stat(local_files, local_bytes, sz, state);
                                 local_top_files.push(sz, current_node, name_bytes, local_arena);
-                                record_file_ext(local_ext_stats, name_bytes, sz);
+                                record_file_ext(
+                                    local_ext_stats,
+                                    name_bytes,
+                                    sz,
+                                    state.config.collect_ext_stats,
+                                );
                             }
                         }
                     }
@@ -807,8 +838,7 @@ fn scan_directory_tree(
         local_arena.add_direct_bytes(current_node, local_dir_size);
 
         // Dynamic work-stealing offload to idle peers
-        if sub_dirs.len() > 1 && state.active_workers.load(Ordering::Relaxed) < state.config.threads
-        {
+        if sub_dirs.len() > 1 {
             let half = sub_dirs.split_off(sub_dirs.len() / 2);
             for sub_name in half {
                 let child_path = if dir_bytes == b"." {
@@ -907,7 +937,12 @@ fn scan_directory_tree(
                     local_dir_size += sz;
                     record_file_stat(local_files, local_bytes, sz, state);
                     local_top_files.push(sz, current_node, &name_bytes, local_arena);
-                    record_file_ext(local_ext_stats, &name_bytes, sz);
+                    record_file_ext(
+                        local_ext_stats,
+                        &name_bytes,
+                        sz,
+                        state.config.collect_ext_stats,
+                    );
                 }
             }
         }
@@ -915,8 +950,7 @@ fn scan_directory_tree(
         local_arena.add_direct_bytes(current_node, local_dir_size);
 
         // Dynamic work-stealing offload to idle peers
-        if sub_dirs.len() > 1 && state.active_workers.load(Ordering::Relaxed) < state.config.threads
-        {
+        if sub_dirs.len() > 1 {
             let half = sub_dirs.split_off(sub_dirs.len() / 2);
             for sub_name in half {
                 let child_path = if dir_bytes == b"." {
@@ -1186,7 +1220,12 @@ fn scan_directory_tree_windows(
                                 utf8_scratch.as_slice(),
                                 local_arena,
                             );
-                            record_file_ext(local_ext_stats, utf8_scratch.as_slice(), sz);
+                            record_file_ext(
+                                local_ext_stats,
+                                utf8_scratch.as_slice(),
+                                sz,
+                                state.config.collect_ext_stats,
+                            );
                         }
                     }
                 }
@@ -1229,7 +1268,12 @@ fn scan_directory_tree_windows(
                         local_dir_size += sz;
                         record_file_stat(local_files, local_bytes, sz, state);
                         local_top_files.push(sz, current_node, &name_bytes, local_arena);
-                        record_file_ext(local_ext_stats, &name_bytes, sz);
+                        record_file_ext(
+                            local_ext_stats,
+                            &name_bytes,
+                            sz,
+                            state.config.collect_ext_stats,
+                        );
                     }
                 }
             }
@@ -1239,9 +1283,7 @@ fn scan_directory_tree_windows(
     local_arena.add_direct_bytes(current_node, local_dir_size);
 
     // Work-stealing: construct PathBuf ONLY when delegating to another worker
-    if sub_dirs_wide.len() > 1
-        && state.active_workers.load(Ordering::Relaxed) < state.config.threads
-    {
+    if sub_dirs_wide.len() > 1 {
         let half = sub_dirs_wide.split_off(sub_dirs_wide.len() / 2);
         for sub_w in half {
             let prev_len = wide_path_stack.push_child(&sub_w);
@@ -1560,6 +1602,7 @@ pub fn init_scan_state(
             threads: num_threads,
             follow_symlinks: options.follow_symlinks,
             cross_filesystems: options.cross_filesystems,
+            collect_ext_stats: options.collect_ext_stats,
         },
         total_bytes: CachePadded(AtomicU64::new(0)),
         total_files: CachePadded(AtomicU64::new(0)),
@@ -1876,6 +1919,7 @@ mod tests {
             excludes: vec![],
             follow_symlinks: false,
             cross_filesystems: false,
+            collect_ext_stats: false,
         };
 
         let result = run_scan(&options).expect("run_scan failed");

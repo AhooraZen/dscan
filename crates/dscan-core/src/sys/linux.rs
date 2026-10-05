@@ -252,20 +252,31 @@ unsafe extern "C" {
 
 /// Pin current thread to physical CPU core.
 pub fn pin_thread_to_core(core_id: usize) -> bool {
-    let num_cores = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .max(1);
-    let target = core_id % num_cores;
-    let mut mask = [0u64; 16]; // 1024-bit cpu_set
-    let word = target / 64;
-    let bit = target % 64;
-    if word < mask.len() {
-        mask[word] |= 1u64 << bit;
+    #[cfg(target_os = "android")]
+    {
+        // On Android heterogenous big.LITTLE architectures, hard-pinning locks threads
+        // to slow efficiency cores (e.g. core 0 at 1.8GHz).
+        // Let the Android CFS / EAS scheduler dynamically balance across Big performance cores.
+        let _ = core_id;
+        return false;
     }
-    // SAFETY: SYS_SCHED_SETAFFINITY on current thread (tid = 0), mask size 128 bytes.
-    let ret = unsafe { syscall(SYS_SCHED_SETAFFINITY, 0, 128, mask.as_ptr() as i64) };
-    ret == 0
+    #[cfg(not(target_os = "android"))]
+    {
+        let num_cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .max(1);
+        let target = core_id % num_cores;
+        let mut mask = [0u64; 16]; // 1024-bit cpu_set
+        let word = target / 64;
+        let bit = target % 64;
+        if word < mask.len() {
+            mask[word] |= 1u64 << bit;
+        }
+        // SAFETY: SYS_SCHED_SETAFFINITY on current thread (tid = 0), mask size 128 bytes.
+        let ret = unsafe { syscall(SYS_SCHED_SETAFFINITY, 0, 128, mask.as_ptr() as i64) };
+        ret == 0
+    }
 }
 
 /// Open a directory with direct flags (O_DIRECTORY | O_CLOEXEC | O_NOATIME).

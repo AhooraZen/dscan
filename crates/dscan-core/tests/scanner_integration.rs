@@ -34,6 +34,7 @@ fn test_synthetic_tree_matches_du() {
         excludes: vec![],
         follow_symlinks: false,
         cross_filesystems: false,
+        collect_ext_stats: false,
     };
 
     let result = run_scan(&options).expect("run_scan failed");
@@ -122,6 +123,7 @@ fn test_synthetic_tree_rollup_cross_platform() {
         excludes: vec![],
         follow_symlinks: false,
         cross_filesystems: false,
+        collect_ext_stats: false,
     };
 
     let result = run_scan(&options).expect("run_scan failed");
@@ -193,6 +195,7 @@ fn test_multi_threaded_scalability() {
             excludes: vec![],
             follow_symlinks: false,
             cross_filesystems: false,
+            collect_ext_stats: false,
         };
 
         let result = run_scan(&options).expect("run_scan failed");
@@ -229,6 +232,7 @@ fn test_symlink_directory_traversal() {
         excludes: vec![],
         follow_symlinks: false,
         cross_filesystems: false,
+        collect_ext_stats: false,
     };
     let res_no_follow = run_scan(&options_no_follow).expect("scan should succeed");
     assert_eq!(res_no_follow.total_files, 1);
@@ -242,6 +246,7 @@ fn test_symlink_directory_traversal() {
         excludes: vec![],
         follow_symlinks: true,
         cross_filesystems: true,
+        collect_ext_stats: false,
     };
     let res_follow = run_scan(&options_follow).expect("scan should succeed");
     assert_eq!(res_follow.total_files, 2);
@@ -298,6 +303,7 @@ fn test_god_speed_synthetic_tree_matches_baseline() {
         excludes: vec![],
         follow_symlinks: false,
         cross_filesystems: false,
+        collect_ext_stats: false,
     };
 
     let result = run_scan(&options).expect("run_scan failed");

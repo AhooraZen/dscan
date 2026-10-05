@@ -669,18 +669,18 @@ dependencies = [
 
 [[package]]
 name = "dscan"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "dscan-core",
 ]
 
 [[package]]
 name = "dscan-core"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "dscan-gui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "dscan-core",
  "parking_lot",

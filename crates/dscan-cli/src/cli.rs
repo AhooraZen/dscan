@@ -43,9 +43,8 @@ impl CliOptions {
         let mut cross_filesystems = false;
 
         let default_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(8)
-            .clamp(2, 32);
+            .map(|n| (n.get() * 2).clamp(4, 64))
+            .unwrap_or(16);
         let mut threads = default_threads;
 
         let mut i = 1;
@@ -167,6 +166,7 @@ impl CliOptions {
             threads: self.threads,
             follow_symlinks: self.follow_symlinks,
             cross_filesystems: self.cross_filesystems,
+            collect_ext_stats: false,
         }
     }
 }

@@ -26,13 +26,13 @@ pub fn start_scan(
     };
 
     let default_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(8)
-        .clamp(2, 32);
+        .map(|n| (n.get() * 2).clamp(4, 64))
+        .unwrap_or(16);
 
     let opts = ScanOptions {
         target_path: target_path.clone(),
         threads: threads.unwrap_or(default_threads),
+        collect_ext_stats: true,
         ..Default::default()
     };
 
