@@ -257,6 +257,42 @@ fn test_symlink_directory_traversal() {
 
 #[test]
 #[cfg(unix)]
+fn test_symlink_cycle_detection() {
+    let temp_dir = std::env::temp_dir().join(format!("dscan_symlink_cycle_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    let scan_root = temp_dir.join("scan_root");
+    let sub_a = scan_root.join("sub_a");
+    let sub_b = sub_a.join("sub_b");
+    fs::create_dir_all(&sub_b).unwrap();
+    fs::write(scan_root.join("root.txt"), "hello").unwrap();
+    fs::write(sub_b.join("b.txt"), "world").unwrap();
+
+    // Create mutual and ancestor symlink cycles:
+    // 1. sub_b/cycle_to_root -> scan_root
+    // 2. sub_b/cycle_to_sub_a -> sub_a
+    let _ = symlink(&scan_root, sub_b.join("cycle_to_root"));
+    let _ = symlink(&sub_a, sub_b.join("cycle_to_sub_a"));
+
+    let options = CliOptions {
+        target_path: scan_root.to_str().unwrap().to_string(),
+        top_limit: 10,
+        max_depth: 16,
+        threads: 4,
+        excludes: vec![],
+        follow_symlinks: true,
+        cross_filesystems: false,
+        collect_ext_stats: false,
+    };
+
+    let result = run_scan(&options).expect("scan with cycles must terminate without loop");
+    assert_eq!(result.total_files, 2);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+#[cfg(unix)]
 fn test_openat2_no_xdev_mount_boundary() {
     let root = std::path::Path::new("/");
     let root_fd = match sys::open_dir(root) {

@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 #[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
@@ -14,10 +14,10 @@ use std::time::{Duration, Instant};
 
 use crate::arena::{DirArena, LocalTopFiles, TopFileCandidate};
 use crate::simd::FastExclusionMatcher;
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 use crate::sys::{
     AT_STATX_DONT_SYNC, AT_SYMLINK_NOFOLLOW, DT_DIR, DT_LNK, DT_REG, DT_UNKNOWN, LinuxDirent64,
-    S_IFDIR, S_IFMT, S_IFREG, STATX_BLOCKS, STATX_TYPE, SYS_GETDENTS64, open_dir,
+    S_IFDIR, S_IFMT, S_IFREG, STATX_BLOCKS, STATX_INO, STATX_TYPE, SYS_GETDENTS64, open_dir,
 };
 use crate::work_stealing::{Steal, Stealer, Worker, deque};
 
@@ -369,6 +369,7 @@ pub struct GlobalState {
     pub cvar_mutex: Mutex<()>,
     pub cancel_requested: CachePadded<AtomicBool>,
     pub pause_requested: CachePadded<AtomicBool>,
+    pub visited_dirs: Mutex<HashSet<(u64, u64)>>,
 }
 
 impl GlobalState {
@@ -396,6 +397,7 @@ pub struct ScanResult {
     pub arenas: Vec<DirArena>,
     pub root: PathBuf,
     pub extension_stats: std::collections::HashMap<String, (u64, u64)>,
+    pub all_dirs: Vec<(PathBuf, u64)>,
 }
 
 #[inline(always)]
@@ -787,7 +789,7 @@ fn scan_directory_tree(
                             fd,
                             path_c,
                             flags,
-                            STATX_TYPE | STATX_BLOCKS,
+                            STATX_TYPE | STATX_BLOCKS | STATX_INO,
                             &mut stx,
                         );
                         if res == 0 {
@@ -796,7 +798,18 @@ fn scan_directory_tree(
                             if file_type == S_IFDIR {
                                 let dev = crate::sys::makedev(stx.stx_dev_major, stx.stx_dev_minor);
                                 if state.config.cross_filesystems || dev == root_dev {
-                                    sub_dirs.push(name_bytes.to_vec());
+                                    if state.config.follow_symlinks {
+                                        if state
+                                            .visited_dirs
+                                            .lock()
+                                            .unwrap()
+                                            .insert((dev, stx.stx_ino))
+                                        {
+                                            sub_dirs.push(name_bytes.to_vec());
+                                        }
+                                    } else {
+                                        sub_dirs.push(name_bytes.to_vec());
+                                    }
                                 }
                             } else if file_type == S_IFREG {
                                 let sz = stx.stx_blocks * 512;
@@ -1376,7 +1389,7 @@ fn worker_loop(
     let mut local_ext_stats: std::collections::HashMap<String, (u64, u64)> =
         std::collections::HashMap::new();
 
-    let mut is_active = thread_id == 0;
+    let mut is_active = true;
     let num_stealers = state.stealers.len();
 
     loop {
@@ -1497,6 +1510,7 @@ fn worker_loop(
                 local_files = 0;
             }
 
+            let guard = state.cvar_mutex.lock().unwrap();
             if is_active {
                 state.active_workers.fetch_sub(1, Ordering::SeqCst);
                 is_active = false;
@@ -1512,17 +1526,13 @@ fn worker_loop(
                 break;
             }
 
-            // Wait for work notification or timeout
-            let guard = state.cvar_mutex.lock().unwrap();
+            let _ = state.cvar.wait_timeout(guard, Duration::from_millis(1));
             if state.done.load(Ordering::SeqCst) {
                 break;
+            } else if !is_active {
+                state.active_workers.fetch_add(1, Ordering::SeqCst);
+                is_active = true;
             }
-            if state.active_workers.load(Ordering::SeqCst) == 0 && state.all_stealers_empty() {
-                state.done.store(true, Ordering::SeqCst);
-                state.cvar.notify_all();
-                break;
-            }
-            let _ = state.cvar.wait_timeout(guard, Duration::from_millis(1));
         }
     }
 
@@ -1599,6 +1609,18 @@ pub fn init_scan_state(
     // Push initial root directory to worker 0
     workers[0].push(root.to_path_buf());
 
+    let visited_dirs = Mutex::new(HashSet::new());
+    if options.follow_symlinks {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            visited_dirs
+                .lock()
+                .unwrap()
+                .insert((root_meta.dev(), root_meta.ino()));
+        }
+    }
+
     let state = Arc::new(GlobalState {
         config: ScanConfig {
             matcher,
@@ -1614,7 +1636,7 @@ pub fn init_scan_state(
         },
         total_bytes: CachePadded(AtomicU64::new(0)),
         total_files: CachePadded(AtomicU64::new(0)),
-        active_workers: CachePadded(AtomicUsize::new(1)),
+        active_workers: CachePadded(AtomicUsize::new(num_threads)),
         done: CachePadded(AtomicBool::new(false)),
         current_active: Mutex::new(String::new()),
         stealers,
@@ -1622,6 +1644,7 @@ pub fn init_scan_state(
         cvar_mutex: Mutex::new(()),
         cancel_requested: CachePadded(AtomicBool::new(false)),
         pause_requested: CachePadded(AtomicBool::new(false)),
+        visited_dirs,
     });
 
     Ok((state, workers))
@@ -1802,17 +1825,24 @@ pub fn execute_workers_and_rollup(
 
     let max_file_size = files_vec.first().map(|(s, _)| *s).unwrap_or(1).max(1);
 
+    let top_dirs = sorted_dirs
+        .iter()
+        .take(options.top_limit)
+        .cloned()
+        .collect();
+
     ScanResult {
         elapsed,
         total_bytes,
         total_files,
-        top_dirs: sorted_dirs.into_iter().take(options.top_limit).collect(),
+        top_dirs,
         top_files: files_vec.into_iter().take(options.top_limit).collect(),
         max_dir_size,
         max_file_size,
         arenas,
         root: root.to_path_buf(),
         extension_stats: merged_ext_stats,
+        all_dirs: sorted_dirs,
     }
 }
 

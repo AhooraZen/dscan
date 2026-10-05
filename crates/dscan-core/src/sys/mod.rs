@@ -1,6 +1,6 @@
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod linux;
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub use linux::*;
 
 #[cfg(target_os = "linux")]

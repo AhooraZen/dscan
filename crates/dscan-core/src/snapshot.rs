@@ -147,9 +147,14 @@ impl ScanSession {
     pub fn get_hierarchical_view(&self, max_depth: u16, max_nodes: usize) -> Vec<TreemapNodeDto> {
         let guard = self.result.lock().unwrap();
         if let Some(ref res) = *guard {
+            let dirs = if !res.all_dirs.is_empty() {
+                &res.all_dirs
+            } else {
+                &res.top_dirs
+            };
             build_treemap_nodes(
                 &res.root,
-                &res.top_dirs,
+                dirs,
                 &res.top_files,
                 res.total_bytes,
                 max_depth,

@@ -114,7 +114,7 @@ fn test_chase_lev_steal_batch() {
     let stolen_count = stealer0.steal_batch(&worker1, 32);
     assert_eq!(stolen_count, 32);
 
-    for i in 0..32 {
+    for i in (0..32).rev() {
         assert_eq!(worker1.pop(), Some(i));
     }
     assert_eq!(worker1.pop(), None);

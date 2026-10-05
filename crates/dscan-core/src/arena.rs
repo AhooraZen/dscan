@@ -240,10 +240,20 @@ impl DirArena {
         }
         chain.reverse();
 
+        let use_backslash = cfg!(windows)
+            && (!chain.is_empty() && self.name_of(chain[0]).contains(&b'\\')
+                || out.contains(&b'\\'));
+        let sep: u8 = if use_backslash { b'\\' } else { b'/' };
+
         for (i, &idx) in chain.iter().enumerate() {
             let name = self.name_of(idx);
-            if i > 0 && !out.ends_with(b"/") && !name.starts_with(b"/") {
-                out.push(b'/');
+            if i > 0
+                && !out.ends_with(b"/")
+                && !out.ends_with(b"\\")
+                && !name.starts_with(b"/")
+                && !name.starts_with(b"\\")
+            {
+                out.push(sep);
             }
             out.extend_from_slice(name);
         }
