@@ -49,6 +49,51 @@ pub const SYS_GETDENTS64: i64 = 220;
 )))]
 pub const SYS_GETDENTS64: i64 = 217;
 
+#[cfg(target_arch = "x86_64")]
+pub const SYS_OPENAT2: i64 = 437;
+
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "loongarch64"
+))]
+pub const SYS_OPENAT2: i64 = 437;
+
+#[cfg(target_arch = "arm")]
+pub const SYS_OPENAT2: i64 = 437;
+
+#[cfg(target_arch = "x86")]
+pub const SYS_OPENAT2: i64 = 437;
+
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "loongarch64",
+    target_arch = "arm",
+    target_arch = "x86"
+)))]
+pub const SYS_OPENAT2: i64 = 437;
+
+pub const RESOLVE_NO_XDEV: u64 = 0x01;
+pub const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+pub const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+pub const RESOLVE_BENEATH: u64 = 0x08;
+pub const RESOLVE_IN_ROOT: u64 = 0x10;
+pub const RESOLVE_CACHED: u64 = 0x20;
+
+pub const EXDEV: i32 = 18;
+pub const ENOSYS: i32 = 38;
+pub const AT_FDCWD: i32 = -100;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct OpenHow {
+    pub flags: u64,
+    pub mode: u64,
+    pub resolve: u64,
+}
+
 pub const O_RDONLY: i32 = 0;
 pub const O_DIRECTORY: i32 = 0o0200000;
 pub const O_CLOEXEC: i32 = 0o2000000;
@@ -243,6 +288,72 @@ pub fn open_dir(path: &Path) -> Option<i32> {
     if fd >= 0 { Some(fd) } else { None }
 }
 
+static HAS_OPENAT2: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Open a directory relative to `dirfd` using `openat2(2)`.
+/// If `no_xdev` is true, passes `RESOLVE_NO_XDEV` to enforce filesystem boundary at kernel level.
+/// Returns:
+/// - `Ok(fd)` on success
+/// - `Err(EXDEV)` if the path crosses a mount point
+/// - `Err(ENOSYS)` if openat2 is not supported by the kernel
+/// - `Err(errno)` on other errors
+pub fn open_dir_at2(dirfd: i32, name: *const std::ffi::c_char, no_xdev: bool) -> Result<i32, i32> {
+    use std::sync::atomic::Ordering;
+
+    if !HAS_OPENAT2.load(Ordering::Relaxed) {
+        return Err(ENOSYS);
+    }
+
+    let mut how = OpenHow {
+        flags: (O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOATIME) as u64,
+        mode: 0,
+        resolve: if no_xdev { RESOLVE_NO_XDEV } else { 0 },
+    };
+
+    // SAFETY: openat2 syscall with valid dirfd, null-terminated name, and pointer to OpenHow.
+    let ret = unsafe {
+        syscall(
+            SYS_OPENAT2,
+            dirfd as i64,
+            name as i64,
+            &how as *const OpenHow as i64,
+            std::mem::size_of::<OpenHow>() as i64,
+        )
+    };
+
+    if ret >= 0 {
+        return Ok(ret as i32);
+    }
+
+    let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    if err == ENOSYS {
+        HAS_OPENAT2.store(false, Ordering::Relaxed);
+        return Err(ENOSYS);
+    }
+
+    // Unprivileged user fallback: retry without O_NOATIME if EPERM or EACCES
+    if err == 1 /* EPERM */ || err == 13
+    /* EACCES */
+    {
+        how.flags = (O_RDONLY | O_DIRECTORY | O_CLOEXEC) as u64;
+        let ret2 = unsafe {
+            syscall(
+                SYS_OPENAT2,
+                dirfd as i64,
+                name as i64,
+                &how as *const OpenHow as i64,
+                std::mem::size_of::<OpenHow>() as i64,
+            )
+        };
+        if ret2 >= 0 {
+            return Ok(ret2 as i32);
+        }
+        return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0));
+    }
+
+    Err(err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +389,46 @@ mod tests {
         assert!(stx.stx_mode & S_IFMT == S_IFDIR);
 
         unsafe { close(fd) };
+    }
+
+    #[test]
+    fn test_openat2_device_boundary() {
+        let root = Path::new("/");
+        let root_fd = match open_dir(root) {
+            Some(fd) => fd,
+            None => return,
+        };
+
+        let sys_name = std::ffi::CString::new("sys").unwrap();
+        let res = open_dir_at2(root_fd, sys_name.as_ptr(), true);
+        match res {
+            Ok(fd) => {
+                unsafe { close(fd) };
+            }
+            Err(EXDEV) => {
+                // Correctly caught cross-device mount boundary!
+            }
+            Err(ENOSYS) => {
+                // openat2 not supported on this kernel
+            }
+            Err(1 /* EPERM */) | Err(13 /* EACCES */) => {
+                // Permission restricted in test environment
+            }
+            Err(other) => {
+                panic!("unexpected error from open_dir_at2: {other}");
+            }
+        }
+
+        let cur_fd = open_dir(Path::new(".")).expect("open current dir");
+        let src_name = std::ffi::CString::new("src").unwrap();
+        let src_res = open_dir_at2(cur_fd, src_name.as_ptr(), true);
+        if let Ok(src_fd) = src_res {
+            assert!(src_fd >= 0);
+            unsafe { close(src_fd) };
+        }
+        unsafe {
+            close(cur_fd);
+            close(root_fd);
+        }
     }
 }

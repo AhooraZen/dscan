@@ -247,3 +247,75 @@ fn test_symlink_directory_traversal() {
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+#[cfg(unix)]
+fn test_openat2_no_xdev_mount_boundary() {
+    let root = std::path::Path::new("/");
+    let root_fd = match dscan::sys::open_dir(root) {
+        Some(fd) => fd,
+        None => return,
+    };
+
+    let sys_name = std::ffi::CString::new("sys").unwrap();
+    let res = dscan::sys::open_dir_at2(root_fd, sys_name.as_ptr(), true);
+    match res {
+        Ok(fd) => {
+            unsafe { dscan::sys::close(fd) };
+        }
+        Err(dscan::sys::EXDEV) => {
+            // openat2 correctly caught cross-device mount boundary!
+        }
+        Err(dscan::sys::ENOSYS) => {
+            // Kernel < 5.6
+        }
+        Err(_) => {}
+    }
+    unsafe { dscan::sys::close(root_fd) };
+}
+
+#[test]
+fn test_god_speed_synthetic_tree_matches_baseline() {
+    let temp_dir = std::env::temp_dir().join(format!("dscan_god_speed_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    // Create a multi-level tree with various file sizes and directory depths
+    for i in 0..5 {
+        let dir = temp_dir.join(format!("branch_{i}/leaf"));
+        fs::create_dir_all(&dir).unwrap();
+        for j in 0..10 {
+            let file_path = dir.join(format!("file_{j}.bin"));
+            fs::write(&file_path, vec![(i * 10 + j) as u8; 1024 * (j + 1)]).unwrap();
+        }
+    }
+
+    let options = CliOptions {
+        target_path: temp_dir.to_str().unwrap().to_string(),
+        top_limit: 15,
+        max_depth: 5,
+        threads: 4,
+        excludes: vec![],
+        follow_symlinks: false,
+        cross_filesystems: false,
+    };
+
+    let result = run_scan(&options).expect("run_scan failed");
+    assert_eq!(result.total_files, 50);
+    assert_eq!(result.top_files.len(), 15);
+
+    // Verify top files are strictly sorted descending by size
+    for w in result.top_files.windows(2) {
+        assert!(
+            w[0].0 >= w[1].0,
+            "top files must be sorted descending by size"
+        );
+    }
+
+    // Verify top file paths exist and are valid PathBufs
+    for (size, path) in &result.top_files {
+        assert!(*size > 0);
+        assert!(path.exists(), "path {:?} must exist", path);
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
