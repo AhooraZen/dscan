@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 use std::path::Path;
+use std::sync::OnceLock;
 
 pub type RawHandle = *mut c_void;
 pub const INVALID_HANDLE_VALUE: RawHandle = -1isize as RawHandle;
@@ -16,12 +17,38 @@ pub const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x00000400;
 
 pub const FILE_ID_BOTH_DIRECTORY_INFO: u32 = 0xa;
 pub const FILE_ID_BOTH_DIRECTORY_RESTART_INFO: u32 = 0xb;
+pub const FILE_ID_BOTH_DIR_INFO_CLASS: u32 = 37;
+
+pub const STATUS_SUCCESS: i32 = 0;
+pub const STATUS_BUFFER_OVERFLOW: i32 = 0x80000005u32 as i32;
+pub const STATUS_NO_MORE_FILES: i32 = 0x80000006u32 as i32;
 
 pub const ERROR_NO_MORE_FILES: u32 = 38;
 pub const ERROR_MORE_DATA: u32 = 234;
 
 pub const STD_OUTPUT_HANDLE: u32 = 0xfffffff5;
 pub const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct IoStatusBlock {
+    pub status: i32,
+    pub information: usize,
+}
+
+pub type NtQueryDirectoryFileFn = unsafe extern "system" fn(
+    file_handle: RawHandle,
+    event: RawHandle,
+    apc_routine: *mut c_void,
+    apc_context: *mut c_void,
+    io_status_block: *mut IoStatusBlock,
+    file_information: *mut c_void,
+    length: u32,
+    file_information_class: u32,
+    return_single_entry: u8,
+    file_name: *mut c_void,
+    restart_scan: u8,
+) -> i32;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -120,18 +147,97 @@ unsafe extern "system" {
 
     pub fn GetConsoleMode(hConsoleHandle: RawHandle, lpMode: *mut u32) -> i32;
     pub fn SetConsoleMode(hConsoleHandle: RawHandle, dwMode: u32) -> i32;
+
+    pub fn GetModuleHandleA(lpModuleName: *const u8) -> RawHandle;
+    pub fn GetProcAddress(hModule: RawHandle, lpProcName: *const u8) -> *mut c_void;
+    pub fn SetThreadAffinityMask(hThread: RawHandle, dwThreadAffinityMask: usize) -> usize;
+    pub fn GetCurrentThread() -> RawHandle;
 }
 
-/// Open a directory handle for raw buffer enumeration using FILE_FLAG_BACKUP_SEMANTICS.
-pub fn open_dir(path: &Path) -> Option<RawHandle> {
-    use std::os::windows::ffi::OsStrExt;
-    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-    wide.push(0);
+static NT_QUERY_DIR: OnceLock<Option<NtQueryDirectoryFileFn>> = OnceLock::new();
 
-    // SAFETY: wide is a valid null-terminated UTF-16 slice.
+pub fn get_nt_query_directory_file() -> Option<NtQueryDirectoryFileFn> {
+    *NT_QUERY_DIR.get_or_init(|| {
+        // SAFETY: ntdll.dll is always mapped into all Windows processes.
+        unsafe {
+            let ntdll = GetModuleHandleA(c"ntdll.dll".as_ptr() as *const u8);
+            if ntdll.is_null() || ntdll == INVALID_HANDLE_VALUE {
+                return None;
+            }
+            let proc = GetProcAddress(ntdll, c"NtQueryDirectoryFile".as_ptr() as *const u8);
+            if proc.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute::<*mut c_void, NtQueryDirectoryFileFn>(
+                    proc,
+                ))
+            }
+        }
+    })
+}
+
+/// Issues native NtQueryDirectoryFile with FileIdBothDirectoryInformation.
+/// Transparently falls back to GetFileInformationByHandleEx if unavailable.
+///
+/// # Safety
+/// `handle` must be an open directory handle, and `buffer` must point to at least `len` bytes.
+pub unsafe fn sys_nt_query_directory_file(
+    handle: RawHandle,
+    buffer: *mut c_void,
+    len: u32,
+    restart_scan: bool,
+) -> (i32, usize) {
+    if let Some(nt_fn) = get_nt_query_directory_file() {
+        let mut iosb = IoStatusBlock::default();
+        // SAFETY: nt_fn pointer is valid from ntdll, handle is valid, and buffer has length len.
+        let status = unsafe {
+            nt_fn(
+                handle,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut iosb,
+                buffer,
+                len,
+                FILE_ID_BOTH_DIR_INFO_CLASS,
+                0,
+                std::ptr::null_mut(),
+                if restart_scan { 1 } else { 0 },
+            )
+        };
+        (status, iosb.information)
+    } else {
+        let class = if restart_scan {
+            FILE_ID_BOTH_DIRECTORY_RESTART_INFO
+        } else {
+            FILE_ID_BOTH_DIRECTORY_INFO
+        };
+        // SAFETY: handle and buffer are valid for GetFileInformationByHandleEx.
+        let ret = unsafe { GetFileInformationByHandleEx(handle, class, buffer, len) };
+        if ret != 0 {
+            (STATUS_SUCCESS, len as usize)
+        } else {
+            (STATUS_NO_MORE_FILES, 0)
+        }
+    }
+}
+
+/// Encode path into a reusable UTF-16 scratch buffer with null terminator.
+pub fn encode_wide_into(path: &Path, scratch: &mut Vec<u16>) -> *const u16 {
+    use std::os::windows::ffi::OsStrExt;
+    scratch.clear();
+    scratch.extend(path.as_os_str().encode_wide());
+    scratch.push(0);
+    scratch.as_ptr()
+}
+
+/// Open directory reusing caller's scratch buffer to avoid heap allocation.
+pub fn open_dir_scratch(path: &Path, scratch: &mut Vec<u16>) -> Option<RawHandle> {
+    let ptr = encode_wide_into(path, scratch);
+    // SAFETY: ptr is a valid null-terminated UTF-16 wide string pointer.
     let handle = unsafe {
         CreateFileW(
-            wide.as_ptr(),
+            ptr,
             FILE_LIST_DIRECTORY,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             std::ptr::null_mut(),
@@ -146,6 +252,12 @@ pub fn open_dir(path: &Path) -> Option<RawHandle> {
     } else {
         Some(handle)
     }
+}
+
+/// Open a directory handle for raw buffer enumeration using FILE_FLAG_BACKUP_SEMANTICS.
+pub fn open_dir(path: &Path) -> Option<RawHandle> {
+    let mut scratch = Vec::new();
+    open_dir_scratch(path, &mut scratch)
 }
 
 /// Safely close a Win32 file handle.
@@ -171,6 +283,21 @@ pub unsafe fn get_volume_serial_number(handle: RawHandle) -> Option<u64> {
         Some(info.dw_volume_serial_number as u64)
     } else {
         None
+    }
+}
+
+/// Pin current thread to physical CPU core on Windows.
+pub fn pin_thread_to_core(core_id: usize) -> bool {
+    let num_cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(64);
+    let target = core_id % num_cores;
+    let mask = 1usize << target;
+    // SAFETY: GetCurrentThread returns pseudo-handle to calling thread.
+    unsafe {
+        let cur = GetCurrentThread();
+        SetThreadAffinityMask(cur, mask) != 0
     }
 }
 

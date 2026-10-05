@@ -1,6 +1,8 @@
+pub mod arena;
 pub mod cli;
 pub mod format;
 pub mod scanner;
+pub mod simd;
 pub mod sys;
 pub mod ui;
 pub mod work_stealing;
