@@ -9,6 +9,17 @@ pub struct CliOptions {
     pub threads: usize,
     pub follow_symlinks: bool,
     pub cross_filesystems: bool,
+    pub json: bool,
+    pub ext: bool,
+}
+
+fn parse_val<'a>(args: &'a [String], i: &mut usize) -> Option<&'a str> {
+    if *i + 1 < args.len() && !args[*i + 1].starts_with('-') {
+        *i += 1;
+        Some(&args[*i])
+    } else {
+        None
+    }
 }
 
 impl CliOptions {
@@ -41,6 +52,8 @@ impl CliOptions {
         let mut max_depth = usize::MAX; // Unlimited by default: finds all deep culprit folders!
         let mut follow_symlinks = false;
         let mut cross_filesystems = false;
+        let mut json = false;
+        let mut ext = false;
 
         let default_threads = std::thread::available_parallelism()
             .map(|n| (n.get() * 2).clamp(4, 64))
@@ -51,37 +64,36 @@ impl CliOptions {
         while i < args.len() {
             match args[i].as_str() {
                 "--exclude" => {
-                    if i + 1 < args.len() {
-                        custom_excludes.push(args[i + 1].clone());
-                        i += 2;
-                    } else {
-                        i += 1;
+                    if let Some(val) = parse_val(args, &mut i) {
+                        custom_excludes.push(val.to_string());
                     }
+                    i += 1;
                 }
                 "--top" => {
-                    if i + 1 < args.len() {
-                        top_limit = args[i + 1].parse().unwrap_or(25);
-                        i += 2;
-                    } else {
-                        i += 1;
+                    if let Some(n) = parse_val(args, &mut i).and_then(|v| v.parse::<usize>().ok()) {
+                        top_limit = n.max(1);
                     }
+                    i += 1;
                 }
                 "--depth" => {
-                    if i + 1 < args.len() {
-                        let d: usize = args[i + 1].parse().unwrap_or(0);
+                    if let Some(d) = parse_val(args, &mut i).and_then(|v| v.parse::<usize>().ok()) {
                         max_depth = if d == 0 { usize::MAX } else { d };
-                        i += 2;
-                    } else {
-                        i += 1;
                     }
+                    i += 1;
                 }
                 "--threads" | "-j" => {
-                    if i + 1 < args.len() {
-                        threads = args[i + 1].parse().unwrap_or(default_threads).max(1);
-                        i += 2;
-                    } else {
-                        i += 1;
+                    if let Some(n) = parse_val(args, &mut i).and_then(|v| v.parse::<usize>().ok()) {
+                        threads = n.clamp(1, 64);
                     }
+                    i += 1;
+                }
+                "--json" => {
+                    json = true;
+                    i += 1;
+                }
+                "--ext" | "--extensions" => {
+                    ext = true;
+                    i += 1;
                 }
                 "-L" | "--follow-symlinks" => {
                     follow_symlinks = true;
@@ -115,6 +127,10 @@ impl CliOptions {
                         "  -L, --follow-symlinks Follow directory symlinks (e.g. Termux ~/storage)"
                     );
                     println!("  -x, --cross-device    Scan across filesystem mount boundaries");
+                    println!(
+                        "  --json                Output scan results as machine-readable JSON"
+                    );
+                    println!("  --ext, --extensions   Display breakdown of top file extensions");
                     println!("  -V, --version         Show version information");
                     println!("  -h, --help            Show this help menu");
                     return None;
@@ -154,6 +170,8 @@ impl CliOptions {
             threads,
             follow_symlinks,
             cross_filesystems,
+            json,
+            ext,
         })
     }
 
@@ -166,7 +184,7 @@ impl CliOptions {
             threads: self.threads,
             follow_symlinks: self.follow_symlinks,
             cross_filesystems: self.cross_filesystems,
-            collect_ext_stats: false,
+            collect_ext_stats: self.ext || self.json,
         }
     }
 }
@@ -186,6 +204,8 @@ mod tests {
         assert!(opts.excludes.contains(&".git".to_string()));
         assert!(!opts.follow_symlinks);
         assert!(!opts.cross_filesystems);
+        assert!(!opts.json);
+        assert!(!opts.ext);
     }
 
     #[test]
@@ -218,5 +238,59 @@ mod tests {
         assert_eq!(opts.max_depth, 5);
         assert_eq!(opts.top_limit, 10);
         assert_eq!(opts.threads, 4);
+    }
+
+    #[test]
+    fn test_cli_json_and_ext_flags() {
+        let args = vec![
+            "dscan".to_string(),
+            "--json".to_string(),
+            "--ext".to_string(),
+        ];
+        let opts = CliOptions::parse_from_args(&args).expect("should parse");
+        assert!(opts.json);
+        assert!(opts.ext);
+
+        let args_long = vec!["dscan".to_string(), "--extensions".to_string()];
+        let opts_long = CliOptions::parse_from_args(&args_long).expect("should parse");
+        assert!(!opts_long.json);
+        assert!(opts_long.ext);
+    }
+
+    #[test]
+    fn test_cli_thread_clamping() {
+        let args_zero = vec![
+            "dscan".to_string(),
+            "--threads".to_string(),
+            "0".to_string(),
+        ];
+        let opts = CliOptions::parse_from_args(&args_zero).expect("should parse");
+        assert_eq!(opts.threads, 1);
+
+        let args_high = vec!["dscan".to_string(), "-j".to_string(), "128".to_string()];
+        let opts_high = CliOptions::parse_from_args(&args_high).expect("should parse");
+        assert_eq!(opts_high.threads, 64);
+    }
+
+    #[test]
+    fn test_cli_flag_swallowing_guard() {
+        let args = vec![
+            "dscan".to_string(),
+            "--top".to_string(),
+            "--threads".to_string(),
+            "4".to_string(),
+        ];
+        let opts = CliOptions::parse_from_args(&args).expect("should parse");
+        assert_eq!(opts.top_limit, 25);
+        assert_eq!(opts.threads, 4);
+
+        let args_excl = vec![
+            "dscan".to_string(),
+            "--exclude".to_string(),
+            "--json".to_string(),
+        ];
+        let opts_excl = CliOptions::parse_from_args(&args_excl).expect("should parse");
+        assert!(opts_excl.json);
+        assert!(!opts_excl.excludes.contains(&"--json".to_string()));
     }
 }

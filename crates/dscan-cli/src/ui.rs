@@ -213,7 +213,7 @@ pub fn clear_spinner_line() {
     }
 }
 
-pub fn render_report(result: &ScanResult) {
+pub fn render_report(result: &ScanResult, show_extensions: bool) {
     let width = get_terminal_width().clamp(36, 80);
 
     // Summary Card
@@ -307,6 +307,32 @@ pub fn render_report(result: &ScanResult) {
                 bar,
                 path_disp
             );
+        }
+    }
+
+    if show_extensions {
+        println!("\n{C_BOLD}{C_YELLOW}📊 Top File Extensions By Size:{C_RESET}");
+        println!("{C_DIM}{divider}{C_RESET}");
+
+        let ext_list = dscan_core::snapshot::build_extension_breakdown(
+            &result.extension_stats,
+            result.total_bytes,
+            10,
+        );
+        if ext_list.is_empty() {
+            println!("  {C_DIM}(no extension data collected){C_RESET}");
+        } else {
+            for item in &ext_list {
+                let bar = make_bar(item.percentage_of_total, bar_width);
+                println!(
+                    "  {C_BOLD}{C_GREEN}{:>10}{C_RESET} {} {C_BOLD}{C_CYAN}{:<10}{C_RESET} {C_YELLOW}{:>5.1}%{C_RESET} {C_DIM}({:>6} files){C_RESET}",
+                    format_bytes(item.total_bytes),
+                    bar,
+                    item.extension,
+                    item.percentage_of_total,
+                    format_count(item.file_count)
+                );
+            }
         }
     }
     println!();
