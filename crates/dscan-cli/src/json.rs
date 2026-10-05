@@ -106,6 +106,7 @@ mod tests {
             arenas: Vec::new(),
             root: std::path::PathBuf::from("."),
             extension_stats: std::collections::HashMap::new(),
+            all_dirs: Vec::new(),
         };
         let json = serialize_scan_result(".", &res);
         assert!(json.contains("\"target_path\": \".\""));
@@ -133,6 +134,7 @@ mod tests {
             arenas: Vec::new(),
             root: std::path::PathBuf::from("."),
             extension_stats: ext_stats,
+            all_dirs: Vec::new(),
         };
         let json = serialize_scan_result("test/path", &res);
         assert!(json.contains("\"target_path\": \"test/path\""));
