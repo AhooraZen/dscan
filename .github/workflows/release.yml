@@ -192,7 +192,7 @@ jobs:
       - name: Install Rust toolchain & Android targets
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
@@ -211,7 +211,7 @@ jobs:
           export PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           cd crates/dscan-gui/src-tauri
           cargo tauri android init
-          cargo tauri android build --apk --target aarch64,armv7
+          cargo tauri android build --apk --target aarch64 --target armv7
           cd ../../..
           find crates/dscan-gui -name "*aarch64*signed*.apk" -o -name "*aarch64*.apk" -o -name "*arm64*.apk" | head -n 1 | xargs -I {} cp {} ./dscan-gui-android-arm64-v8a.apk || true
           find crates/dscan-gui -name "*armv7*signed*.apk" -o -name "*armv7*.apk" -o -name "*armeabi*.apk" | head -n 1 | xargs -I {} cp {} ./dscan-gui-android-armeabi-v7a.apk || true
