@@ -319,3 +319,81 @@ fn test_god_speed_synthetic_tree_matches_baseline() {
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_windows_wide_path_stack_push_pop_integrity() {
+    use dscan::scanner::WidePathStack;
+
+    let mut stack = WidePathStack::new();
+    assert!(stack.is_empty());
+    assert_eq!(stack.len(), 0);
+
+    // Root drive: C:\
+    let root_wide: Vec<u16> = "C:\\".encode_utf16().collect();
+    stack.set_root_wide(&root_wide);
+
+    // After set_root_wide for <= 3 chars, keeps trailing slash
+    let ptr = stack.as_null_terminated();
+    let slice = unsafe {
+        let mut len = 0;
+        // SAFETY: ptr is null-terminated and len is within capacity.
+        while *ptr.add(len) != 0 {
+            len += 1;
+        }
+        std::slice::from_raw_parts(ptr, len)
+    };
+    assert_eq!(String::from_utf16(slice).unwrap(), "C:\\");
+
+    // Push 100 nested child directories
+    let mut lengths = Vec::new();
+    for i in 0..100 {
+        let child_name: Vec<u16> = format!("dir_{i}").encode_utf16().collect();
+        let prev_len = stack.push_child(&child_name);
+        lengths.push(prev_len);
+    }
+
+    assert_eq!(lengths.len(), 100);
+
+    // Verify null-terminated pointer doesn't corrupt stack
+    let ptr = stack.as_null_terminated();
+    assert!(!ptr.is_null());
+
+    // Pop all 100 directories in LIFO order
+    while let Some(prev_len) = lengths.pop() {
+        stack.truncate(prev_len);
+    }
+
+    // Stack should be back to root C:\
+    let ptr = stack.as_null_terminated();
+    let slice = unsafe {
+        let mut len = 0;
+        // SAFETY: ptr is null-terminated and len is within capacity.
+        while *ptr.add(len) != 0 {
+            len += 1;
+        }
+        std::slice::from_raw_parts(ptr, len)
+    };
+    assert_eq!(String::from_utf16(slice).unwrap(), "C:\\");
+}
+
+#[test]
+fn test_utf16_transcoding_exhaustive() {
+    use dscan::simd::transcode_utf16_to_utf8;
+
+    let mut dst = Vec::new();
+
+    // Test ASCII lengths from 0 to 256
+    for len in 0..=256 {
+        let text: String = (0..len).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+        let utf16: Vec<u16> = text.encode_utf16().collect();
+        transcode_utf16_to_utf8(&utf16, &mut dst);
+        assert_eq!(dst, text.as_bytes());
+    }
+
+    // Boundary surrogate pairs (Emoji, musical symbols, rare CJK)
+    let complex = "Hello 🦀 World 🚀! \u{10FFFF} \u{1F3BC} \u{20000} Test: سلام دنیا";
+    let utf16: Vec<u16> = complex.encode_utf16().collect();
+    transcode_utf16_to_utf8(&utf16, &mut dst);
+    assert_eq!(dst, complex.as_bytes());
+    assert_eq!(dst, String::from_utf16_lossy(&utf16).as_bytes());
+}

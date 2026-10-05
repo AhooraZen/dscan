@@ -372,8 +372,17 @@ mod tests {
         assert!(is_dot_or_dotdot_utf16(&[b'.' as u16]));
         assert!(is_dot_or_dotdot_utf16(&[b'.' as u16, b'.' as u16]));
         assert!(!is_dot_or_dotdot_utf16(&[]));
-        assert!(!is_dot_or_dotdot_utf16(&[b'.' as u16, b'.' as u16, b'.' as u16]));
-        assert!(!is_dot_or_dotdot_utf16(&[b'.' as u16, b'g' as u16, b'i' as u16, b't' as u16]));
+        assert!(!is_dot_or_dotdot_utf16(&[
+            b'.' as u16,
+            b'.' as u16,
+            b'.' as u16
+        ]));
+        assert!(!is_dot_or_dotdot_utf16(&[
+            b'.' as u16,
+            b'g' as u16,
+            b'i' as u16,
+            b't' as u16
+        ]));
         assert!(!is_dot_or_dotdot_utf16(&[b'a' as u16]));
     }
 

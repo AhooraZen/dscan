@@ -187,11 +187,7 @@ unsafe extern "system" {
         flProtect: u32,
     ) -> *mut c_void;
 
-    pub fn VirtualFree(
-        lpAddress: *mut c_void,
-        dwSize: usize,
-        dwFreeType: u32,
-    ) -> i32;
+    pub fn VirtualFree(lpAddress: *mut c_void, dwSize: usize, dwFreeType: u32) -> i32;
 
     pub fn GetLargePageMinimum() -> usize;
 }
@@ -210,9 +206,7 @@ pub fn get_nt_query_directory_file_ex() -> Option<NtQueryDirectoryFileExFn> {
             if proc.is_null() {
                 None
             } else {
-                Some(std::mem::transmute::<*mut c_void, NtQueryDirectoryFileExFn>(
-                    proc,
-                ))
+                Some(std::mem::transmute::<*mut c_void, NtQueryDirectoryFileExFn>(proc))
             }
         }
     })
