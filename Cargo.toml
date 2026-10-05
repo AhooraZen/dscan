@@ -5,6 +5,11 @@ members = [
     "crates/dscan-cli",
     "crates/dscan-gui/src-tauri",
 ]
+default-members = [
+    "crates/dscan-core",
+    "crates/dscan-cli",
+]
+default-run = "dscan"
 
 [profile.release]
 opt-level = 3
@@ -12,3 +17,9 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1

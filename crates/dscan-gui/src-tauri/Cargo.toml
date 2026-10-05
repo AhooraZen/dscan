@@ -9,10 +9,13 @@ license = "MIT OR Apache-2.0"
 [lib]
 name = "dscan_gui_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+test = false
+doctest = false
 
 [[bin]]
 name = "dscan-gui"
 path = "src/main.rs"
+test = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -51,7 +51,9 @@ fn test_chase_lev_growth() {
 fn test_chase_lev_multi_thief_concurrent() {
     let (worker, stealer) = deque::<usize>();
     let total_items = 20_000;
-    let num_thieves = 8;
+    let num_thieves = std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .clamp(2, 8);
     let done = Arc::new(AtomicBool::new(false));
 
     let mut thief_handles = Vec::new();
@@ -64,7 +66,7 @@ fn test_chase_lev_multi_thief_concurrent() {
                 match s.steal() {
                     Steal::Success(val) => stolen.push(val),
                     Steal::Empty => thread::yield_now(),
-                    Steal::Retry => {}
+                    Steal::Retry => std::hint::spin_loop(),
                 }
             }
             stolen
@@ -156,7 +158,9 @@ fn test_chase_lev_bulk_steal_half() {
 fn test_chase_lev_steal_batch_concurrent() {
     let (worker, stealer) = deque::<usize>();
     let total_items = 20_000;
-    let num_thieves = 8;
+    let num_thieves = std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .clamp(2, 8);
     let done = Arc::new(AtomicBool::new(false));
 
     let mut thief_handles = Vec::new();
