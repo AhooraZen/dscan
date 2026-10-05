@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["AhooraZen <ahoora935137@gmail.com>"]
 description = "High-throughput kernel directory traversal and disk space accounting engine"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/parchlinux/dscan"
+repository = "https://github.com/AhooraZen/dscan"
 readme = "../../README.md"
 
 [lib]

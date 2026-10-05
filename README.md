@@ -33,7 +33,7 @@ cargo install dscan
 Or build from source:
 
 ```bash
-git clone https://github.com/parchlinux/dscan.git
+git clone https://github.com/AhooraZen/dscan.git
 cd dscan
 cargo build --release
 ```
