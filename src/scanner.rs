@@ -487,13 +487,14 @@ fn scan_directory_tree_windows(
     let excludes = &state.config.excludes;
 
     if let Some(h_dir) = open_dir(dir_path) {
-        if !state.config.cross_filesystems {
-            if let Some(vol) = get_volume_serial_number(h_dir) {
-                if vol != root_dev {
-                    close_handle(h_dir);
-                    return;
-                }
-            }
+        if !state.config.cross_filesystems
+            // SAFETY: h_dir is a valid open directory handle.
+            && let Some(vol) = (unsafe { get_volume_serial_number(h_dir) })
+            && vol != root_dev
+        {
+            // SAFETY: h_dir is a valid open handle.
+            unsafe { close_handle(h_dir) };
+            return;
         }
 
         let buf_slice = buffer.as_mut_slice();
@@ -547,8 +548,7 @@ fn scan_directory_tree_windows(
                     let mut excluded = false;
                     for exc in excludes {
                         let exc_str = String::from_utf8_lossy(exc);
-                        if child_path_str.ends_with(exc_str.as_ref())
-                            || os_name == exc_str.as_ref()
+                        if child_path_str.ends_with(exc_str.as_ref()) || os_name == exc_str.as_ref()
                         {
                             excluded = true;
                             break;
@@ -597,7 +597,8 @@ fn scan_directory_tree_windows(
             }
         }
 
-        close_handle(h_dir);
+        // SAFETY: h_dir is a valid open handle.
+        unsafe { close_handle(h_dir) };
     } else if let Ok(entries) = fs::read_dir(dir_path) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -782,8 +783,10 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
     let root_dev = {
         let _ = &root_meta;
         if let Some(h) = crate::sys::open_dir(root) {
-            let dev = crate::sys::get_volume_serial_number(h).unwrap_or(0);
-            crate::sys::close_handle(h);
+            // SAFETY: h is a valid open directory handle returned by open_dir.
+            let dev = (unsafe { crate::sys::get_volume_serial_number(h) }).unwrap_or(0);
+            // SAFETY: h is a valid open handle returned by open_dir.
+            unsafe { crate::sys::close_handle(h) };
             dev
         } else {
             0

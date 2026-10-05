@@ -149,17 +149,23 @@ pub fn open_dir(path: &Path) -> Option<RawHandle> {
 }
 
 /// Safely close a Win32 file handle.
-pub fn close_handle(handle: RawHandle) {
+///
+/// # Safety
+/// `handle` must be a valid open Win32 handle or `INVALID_HANDLE_VALUE` / null.
+pub unsafe fn close_handle(handle: RawHandle) {
     if handle != INVALID_HANDLE_VALUE && !handle.is_null() {
-        // SAFETY: handle is checked for non-null and INVALID_HANDLE_VALUE.
+        // SAFETY: handle is checked for non-null and INVALID_HANDLE_VALUE and guaranteed by caller to be valid.
         unsafe { CloseHandle(handle) };
     }
 }
 
 /// Retrieve the volume serial number for filesystem boundary enforcement.
-pub fn get_volume_serial_number(handle: RawHandle) -> Option<u64> {
+///
+/// # Safety
+/// `handle` must be a valid open Win32 file/directory handle.
+pub unsafe fn get_volume_serial_number(handle: RawHandle) -> Option<u64> {
     let mut info = ByHandleFileInformation::default();
-    // SAFETY: info is a valid ByHandleFileInformation struct.
+    // SAFETY: info is a valid ByHandleFileInformation struct, and caller guarantees handle is valid.
     let ret = unsafe { GetFileInformationByHandle(handle, &mut info) };
     if ret != 0 {
         Some(info.dw_volume_serial_number as u64)
