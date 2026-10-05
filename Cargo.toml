@@ -3,7 +3,7 @@ resolver = "3"
 members = [
     "crates/dscan-core",
     "crates/dscan-cli",
-    "crates/dscan-gui/src-tauri",
+    "crates/dscan-gui",
 ]
 default-members = [
     "crates/dscan-core",
