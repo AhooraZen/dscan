@@ -19,6 +19,20 @@ pub const FILE_ID_BOTH_DIRECTORY_INFO: u32 = 0xa;
 pub const FILE_ID_BOTH_DIRECTORY_RESTART_INFO: u32 = 0xb;
 pub const FILE_ID_BOTH_DIR_INFO_CLASS: u32 = 37;
 
+// NT Query Directory Flags for NtQueryDirectoryFileEx
+pub const SL_RESTART_SCAN: u32 = 0x00000001;
+pub const SL_RETURN_SINGLE_ENTRY: u32 = 0x00000002;
+pub const SL_INDEX_SPECIFIED: u32 = 0x00000004;
+pub const SL_RETURN_ON_DISK_ENTRIES_ONLY: u32 = 0x00000200;
+pub const SL_NO_EXTENDED_ATTRIBUTES: u32 = 0x00000800;
+
+// Virtual Memory Flags
+pub const MEM_COMMIT: u32 = 0x00001000;
+pub const MEM_RESERVE: u32 = 0x00002000;
+pub const MEM_RELEASE: u32 = 0x00008000;
+pub const MEM_LARGE_PAGES: u32 = 0x20000000;
+pub const PAGE_READWRITE: u32 = 0x04;
+
 pub const STATUS_SUCCESS: i32 = 0;
 pub const STATUS_BUFFER_OVERFLOW: i32 = 0x80000005u32 as i32;
 pub const STATUS_NO_MORE_FILES: i32 = 0x80000006u32 as i32;
@@ -48,6 +62,19 @@ pub type NtQueryDirectoryFileFn = unsafe extern "system" fn(
     return_single_entry: u8,
     file_name: *mut c_void,
     restart_scan: u8,
+) -> i32;
+
+pub type NtQueryDirectoryFileExFn = unsafe extern "system" fn(
+    file_handle: RawHandle,
+    event: RawHandle,
+    apc_routine: *mut c_void,
+    apc_context: *mut c_void,
+    io_status_block: *mut IoStatusBlock,
+    file_information: *mut c_void,
+    length: u32,
+    file_information_class: u32,
+    query_flags: u32,
+    file_name: *mut c_void,
 ) -> i32;
 
 #[repr(C)]
@@ -152,6 +179,43 @@ unsafe extern "system" {
     pub fn GetProcAddress(hModule: RawHandle, lpProcName: *const u8) -> *mut c_void;
     pub fn SetThreadAffinityMask(hThread: RawHandle, dwThreadAffinityMask: usize) -> usize;
     pub fn GetCurrentThread() -> RawHandle;
+
+    pub fn VirtualAlloc(
+        lpAddress: *mut c_void,
+        dwSize: usize,
+        flAllocationType: u32,
+        flProtect: u32,
+    ) -> *mut c_void;
+
+    pub fn VirtualFree(
+        lpAddress: *mut c_void,
+        dwSize: usize,
+        dwFreeType: u32,
+    ) -> i32;
+
+    pub fn GetLargePageMinimum() -> usize;
+}
+
+static NT_QUERY_DIR_EX: OnceLock<Option<NtQueryDirectoryFileExFn>> = OnceLock::new();
+
+pub fn get_nt_query_directory_file_ex() -> Option<NtQueryDirectoryFileExFn> {
+    *NT_QUERY_DIR_EX.get_or_init(|| {
+        // SAFETY: ntdll.dll is always mapped into all Windows processes.
+        unsafe {
+            let ntdll = GetModuleHandleA(c"ntdll.dll".as_ptr() as *const u8);
+            if ntdll.is_null() || ntdll == INVALID_HANDLE_VALUE {
+                return None;
+            }
+            let proc = GetProcAddress(ntdll, c"NtQueryDirectoryFileEx".as_ptr() as *const u8);
+            if proc.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute::<*mut c_void, NtQueryDirectoryFileExFn>(
+                    proc,
+                ))
+            }
+        }
+    })
 }
 
 static NT_QUERY_DIR: OnceLock<Option<NtQueryDirectoryFileFn>> = OnceLock::new();
@@ -176,19 +240,40 @@ pub fn get_nt_query_directory_file() -> Option<NtQueryDirectoryFileFn> {
     })
 }
 
-/// Issues native NtQueryDirectoryFile with FileIdBothDirectoryInformation.
-/// Transparently falls back to GetFileInformationByHandleEx if unavailable.
+/// Issues native NtQueryDirectoryFileEx with SL_NO_EXTENDED_ATTRIBUTES.
+/// Transparently falls back to NtQueryDirectoryFile and GetFileInformationByHandleEx.
 ///
 /// # Safety
 /// `handle` must be an open directory handle, and `buffer` must point to at least `len` bytes.
-pub unsafe fn sys_nt_query_directory_file(
+pub unsafe fn sys_nt_query_directory_file_fast(
     handle: RawHandle,
     buffer: *mut c_void,
     len: u32,
     restart_scan: bool,
 ) -> (i32, usize) {
-    if let Some(nt_fn) = get_nt_query_directory_file() {
-        let mut iosb = IoStatusBlock::default();
+    let mut iosb = IoStatusBlock::default();
+    if let Some(nt_ex) = get_nt_query_directory_file_ex() {
+        let mut flags = SL_NO_EXTENDED_ATTRIBUTES;
+        if restart_scan {
+            flags |= SL_RESTART_SCAN;
+        }
+        // SAFETY: nt_ex pointer is valid from ntdll, handle is valid, and buffer has length len.
+        let status = unsafe {
+            nt_ex(
+                handle,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut iosb,
+                buffer,
+                len,
+                FILE_ID_BOTH_DIR_INFO_CLASS,
+                flags,
+                std::ptr::null_mut(),
+            )
+        };
+        (status, iosb.information)
+    } else if let Some(nt_fn) = get_nt_query_directory_file() {
         // SAFETY: nt_fn pointer is valid from ntdll, handle is valid, and buffer has length len.
         let status = unsafe {
             nt_fn(
@@ -222,6 +307,47 @@ pub unsafe fn sys_nt_query_directory_file(
     }
 }
 
+/// Issues native NtQueryDirectoryFile with FileIdBothDirectoryInformation.
+/// Transparently falls back to GetFileInformationByHandleEx if unavailable.
+///
+/// # Safety
+/// `handle` must be an open directory handle, and `buffer` must point to at least `len` bytes.
+#[inline(always)]
+pub unsafe fn sys_nt_query_directory_file(
+    handle: RawHandle,
+    buffer: *mut c_void,
+    len: u32,
+    restart_scan: bool,
+) -> (i32, usize) {
+    // SAFETY: caller upholds safety contract for sys_nt_query_directory_file_fast.
+    unsafe { sys_nt_query_directory_file_fast(handle, buffer, len, restart_scan) }
+}
+
+/// Open directory from a null-terminated UTF-16 pointer without allocation.
+///
+/// # Safety
+/// `ptr` must point to a valid null-terminated UTF-16 wide string.
+#[inline(always)]
+pub unsafe fn open_dir_from_wide_ptr(ptr: *const u16) -> Option<RawHandle> {
+    // SAFETY: caller guarantees ptr points to valid null-terminated UTF-16 wide string.
+    let handle = unsafe {
+        CreateFileW(
+            ptr,
+            FILE_LIST_DIRECTORY,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+        None
+    } else {
+        Some(handle)
+    }
+}
+
 /// Encode path into a reusable UTF-16 scratch buffer with null terminator.
 pub fn encode_wide_into(path: &Path, scratch: &mut Vec<u16>) -> *const u16 {
     use std::os::windows::ffi::OsStrExt;
@@ -235,23 +361,7 @@ pub fn encode_wide_into(path: &Path, scratch: &mut Vec<u16>) -> *const u16 {
 pub fn open_dir_scratch(path: &Path, scratch: &mut Vec<u16>) -> Option<RawHandle> {
     let ptr = encode_wide_into(path, scratch);
     // SAFETY: ptr is a valid null-terminated UTF-16 wide string pointer.
-    let handle = unsafe {
-        CreateFileW(
-            ptr,
-            FILE_LIST_DIRECTORY,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            std::ptr::null_mut(),
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
-            std::ptr::null_mut(),
-        )
-    };
-
-    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
-        None
-    } else {
-        Some(handle)
-    }
+    unsafe { open_dir_from_wide_ptr(ptr) }
 }
 
 /// Open a directory handle for raw buffer enumeration using FILE_FLAG_BACKUP_SEMANTICS.
