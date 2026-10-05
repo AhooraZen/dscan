@@ -12,6 +12,7 @@ pub const C_GREEN: &str = "\x1b[38;2;80;250;123m";
 pub const C_PURPLE: &str = "\x1b[38;2;189;147;249m";
 pub const C_YELLOW: &str = "\x1b[38;2;241;250;140m";
 
+#[cfg(unix)]
 #[repr(C)]
 struct Winsize {
     ws_row: u16,
@@ -20,8 +21,10 @@ struct Winsize {
     ws_ypixel: u16,
 }
 
+#[cfg(unix)]
 const TIOCGWINSZ: u64 = 0x5413;
 
+#[cfg(unix)]
 pub fn get_terminal_width() -> usize {
     let mut ws = Winsize {
         ws_row: 0,
@@ -36,6 +39,36 @@ pub fn get_terminal_width() -> usize {
     } else {
         80
     }
+}
+
+#[cfg(windows)]
+pub fn get_terminal_width() -> usize {
+    use crate::sys::{
+        ConsoleScreenBufferInfo, Coord, GetConsoleScreenBufferInfo, GetStdHandle,
+        STD_OUTPUT_HANDLE, SmallRect,
+    };
+    let mut csbi = ConsoleScreenBufferInfo {
+        dw_size: Coord { x: 0, y: 0 },
+        dw_cursor_position: Coord { x: 0, y: 0 },
+        w_attributes: 0,
+        sr_window: SmallRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        },
+        dw_maximum_window_size: Coord { x: 0, y: 0 },
+    };
+    // SAFETY: handle retrieved via standard GetStdHandle and passed to GetConsoleScreenBufferInfo.
+    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    let ret = unsafe { GetConsoleScreenBufferInfo(handle, &mut csbi) };
+    if ret != 0 {
+        let width = (csbi.sr_window.right - csbi.sr_window.left + 1) as usize;
+        if width > 10 {
+            return width;
+        }
+    }
+    80
 }
 
 pub fn format_count(n: u64) -> String {
