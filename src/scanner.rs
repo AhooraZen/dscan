@@ -1,5 +1,6 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+#[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -33,6 +34,13 @@ enum BufferSource {
     PrePopulatedMmap {
         ptr: *mut u8,
         size: usize,
+    },
+    #[cfg(windows)]
+    VirtualAlloc {
+        ptr: *mut u8,
+        #[allow(dead_code)]
+        size: usize,
+        is_large_page: bool,
     },
     HeapLayout(std::alloc::Layout),
 }
@@ -103,6 +111,57 @@ impl AlignedBuffer {
             }
         }
 
+        #[cfg(windows)]
+        {
+            use crate::sys::windows::*;
+            // Attempt 2 MiB Large Page allocation if size is suitable
+            let large_page_min = unsafe { GetLargePageMinimum() };
+            if large_page_min > 0 && size >= large_page_min && size.is_multiple_of(large_page_min) {
+                // SAFETY: VirtualAlloc with MEM_COMMIT | MEM_RESERVE | MEM_LARGE_PAGES.
+                let ptr = unsafe {
+                    VirtualAlloc(
+                        std::ptr::null_mut(),
+                        size,
+                        MEM_COMMIT | MEM_RESERVE | MEM_LARGE_PAGES,
+                        PAGE_READWRITE,
+                    )
+                };
+                if !ptr.is_null() {
+                    return AlignedBuffer {
+                        ptr: ptr as *mut u8,
+                        source: BufferSource::VirtualAlloc {
+                            ptr: ptr as *mut u8,
+                            size,
+                            is_large_page: true,
+                        },
+                        len: size,
+                    };
+                }
+            }
+
+            // Standard VirtualAlloc (page-aligned, avoids CRT heap contention)
+            // SAFETY: VirtualAlloc with MEM_COMMIT | MEM_RESERVE.
+            let ptr = unsafe {
+                VirtualAlloc(
+                    std::ptr::null_mut(),
+                    size,
+                    MEM_COMMIT | MEM_RESERVE,
+                    PAGE_READWRITE,
+                )
+            };
+            if !ptr.is_null() {
+                return AlignedBuffer {
+                    ptr: ptr as *mut u8,
+                    source: BufferSource::VirtualAlloc {
+                        ptr: ptr as *mut u8,
+                        size,
+                        is_large_page: false,
+                    },
+                    len: size,
+                };
+            }
+        }
+
         // Standard heap allocation fallback
         let layout = std::alloc::Layout::from_size_align(size, align).expect("valid layout");
         // SAFETY: layout has non-zero size and valid power-of-two alignment.
@@ -137,6 +196,17 @@ impl AlignedBuffer {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+
+    #[cfg(windows)]
+    pub fn is_large_page(&self) -> bool {
+        matches!(
+            self.source,
+            BufferSource::VirtualAlloc {
+                is_large_page: true,
+                ..
+            }
+        )
+    }
 }
 
 impl Drop for AlignedBuffer {
@@ -147,6 +217,17 @@ impl Drop for AlignedBuffer {
                 // SAFETY: ptr was allocated by mmap and size matches.
                 unsafe {
                     crate::sys::munmap(ptr as *mut std::ffi::c_void, size);
+                }
+            }
+            #[cfg(windows)]
+            BufferSource::VirtualAlloc { ptr, .. } => {
+                // SAFETY: ptr was allocated by VirtualAlloc with MEM_COMMIT | MEM_RESERVE.
+                unsafe {
+                    crate::sys::VirtualFree(
+                        ptr as *mut std::ffi::c_void,
+                        0,
+                        crate::sys::MEM_RELEASE,
+                    );
                 }
             }
             BufferSource::HeapLayout(layout) => {
@@ -799,32 +880,123 @@ fn scan_directory_tree(
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct WidePathStack {
+    wide: Vec<u16>,
+}
+
+impl WidePathStack {
+    pub fn new() -> Self {
+        Self {
+            wide: Vec::with_capacity(1024),
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn set_root(&mut self, path: &Path) {
+        use std::os::windows::ffi::OsStrExt;
+        self.wide.clear();
+        self.wide.extend(path.as_os_str().encode_wide());
+        while self.wide.len() > 3
+            && (self.wide.last() == Some(&(b'\\' as u16))
+                || self.wide.last() == Some(&(b'/' as u16)))
+        {
+            self.wide.pop();
+        }
+    }
+
+    pub fn set_root_wide(&mut self, wide_root: &[u16]) {
+        self.wide.clear();
+        self.wide.extend_from_slice(wide_root);
+        while self.wide.len() > 3
+            && (self.wide.last() == Some(&(b'\\' as u16))
+                || self.wide.last() == Some(&(b'/' as u16)))
+        {
+            self.wide.pop();
+        }
+    }
+
+    /// Push child directory wide characters. Returns the previous length to pop.
+    #[inline(always)]
+    pub fn push_child(&mut self, child_name_wide: &[u16]) -> usize {
+        let prev_len = self.wide.len();
+        if !self.wide.ends_with(&[b'\\' as u16]) && !self.wide.ends_with(&[b'/' as u16]) {
+            self.wide.push(b'\\' as u16);
+        }
+        self.wide.extend_from_slice(child_name_wide);
+        prev_len
+    }
+
+    #[inline(always)]
+    pub fn truncate(&mut self, len: usize) {
+        self.wide.truncate(len);
+    }
+
+    /// Returns a null-terminated pointer to pass directly to CreateFileW without allocation.
+    #[inline(always)]
+    pub fn as_null_terminated(&mut self) -> *const u16 {
+        self.wide.push(0);
+        let ptr = self.wide.as_ptr();
+        self.wide.pop();
+        ptr
+    }
+
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[u16] {
+        &self.wide
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.wide.len()
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.wide.is_empty()
+    }
+
+    #[cfg(windows)]
+    pub fn to_path_buf(&self) -> PathBuf {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+        PathBuf::from(OsString::from_wide(&self.wide))
+    }
+}
+
+impl Default for WidePathStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(windows)]
 #[allow(clippy::too_many_arguments)]
 fn scan_directory_tree_windows(
-    dir_path: &Path,
     current_node: u32,
     rel_depth: usize,
     state: &Arc<GlobalState>,
     worker: &Worker<PathBuf>,
     dual_buffer: &mut DualBuffer,
-    scratch: &mut Vec<u16>,
+    wide_path_stack: &mut WidePathStack,
+    path_stack: &mut Vec<u8>,
+    utf8_scratch: &mut Vec<u8>,
     local_arena: &mut DirArena,
     local_top_files: &mut LocalTopFiles,
     local_files: &mut u64,
     local_bytes: &mut u64,
 ) {
-    use crate::sys::*;
-    use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt;
+    use crate::simd::{is_dot_or_dotdot_utf16, transcode_utf16_to_utf8};
+    use crate::sys::windows::*;
 
     let mut local_dir_size: u64 = 0;
-    let mut sub_dirs: Vec<PathBuf> = Vec::new();
+    let mut sub_dirs_wide: Vec<Vec<u16>> = Vec::new();
 
     let root_dev = state.config.root_dev;
     let matcher = &state.config.matcher;
 
-    if let Some(h_dir) = open_dir_scratch(dir_path, scratch) {
+    let wide_ptr = wide_path_stack.as_null_terminated();
+    if let Some(h_dir) = unsafe { open_dir_from_wide_ptr(wide_ptr) } {
         if !state.config.cross_filesystems
             // SAFETY: h_dir is a valid open directory handle.
             && let Some(vol) = (unsafe { get_volume_serial_number(h_dir) })
@@ -841,9 +1013,9 @@ fn scan_directory_tree_windows(
         let mut restart_scan = true;
 
         loop {
-            // SAFETY: h_dir is a valid directory handle, buf_ptr is a valid aligned buffer pointer.
+            // SAFETY: h_dir is a valid directory handle, buf_ptr is a valid aligned buffer pointer of buf_len bytes.
             let (status, info_bytes) =
-                unsafe { sys_nt_query_directory_file(h_dir, buf_ptr, buf_len, restart_scan) };
+                unsafe { sys_nt_query_directory_file_fast(h_dir, buf_ptr, buf_len, restart_scan) };
 
             if status != STATUS_SUCCESS || info_bytes == 0 {
                 break;
@@ -871,21 +1043,22 @@ fn scan_directory_tree_windows(
 
                 let file_name_ptr =
                     unsafe { (entry_ptr as *const u8).add(fn_offset) as *const u16 };
-
+                // SAFETY: file_name_ptr is within buffer bounds verified above.
                 let name_slice =
                     unsafe { std::slice::from_raw_parts(file_name_ptr, name_len_wchars) };
 
-                let is_dot = name_slice == [b'.' as u16];
-                let is_dotdot = name_slice == [b'.' as u16, b'.' as u16];
+                if !is_dot_or_dotdot_utf16(name_slice) {
+                    transcode_utf16_to_utf8(name_slice, utf8_scratch);
 
-                if !is_dot && !is_dotdot {
-                    let os_name = OsString::from_wide(name_slice);
-                    let child_path = dir_path.join(&os_name);
-                    let child_path_str = child_path.to_string_lossy();
-                    let os_name_str = os_name.to_string_lossy();
+                    let orig_path_len = path_stack.len();
+                    if !path_stack.ends_with(b"\\") && !path_stack.ends_with(b"/") {
+                        path_stack.push(b'\\');
+                    }
+                    path_stack.extend_from_slice(utf8_scratch);
 
                     let excluded =
-                        matcher.is_excluded(child_path_str.as_bytes(), os_name_str.as_bytes());
+                        matcher.is_excluded(path_stack.as_slice(), utf8_scratch.as_slice());
+                    path_stack.truncate(orig_path_len);
 
                     if !excluded {
                         let attrs = entry.file_attributes;
@@ -894,7 +1067,7 @@ fn scan_directory_tree_windows(
 
                         if is_dir {
                             if !is_reparse || state.config.follow_symlinks {
-                                sub_dirs.push(child_path);
+                                sub_dirs_wide.push(name_slice.to_vec());
                             }
                         } else {
                             let sz = if entry.allocation_size > 0 {
@@ -908,7 +1081,7 @@ fn scan_directory_tree_windows(
                             local_top_files.push(
                                 sz,
                                 current_node,
-                                os_name_str.as_bytes(),
+                                utf8_scratch.as_slice(),
                                 local_arena,
                             );
                         }
@@ -926,24 +1099,34 @@ fn scan_directory_tree_windows(
 
         // SAFETY: h_dir is a valid open handle.
         unsafe { close_handle(h_dir) };
-    } else if let Ok(entries) = fs::read_dir(dir_path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let p_bytes = path.to_string_lossy().as_bytes().to_vec();
-            let name_bytes = entry.file_name().to_string_lossy().as_bytes().to_vec();
-
-            if matcher.is_excluded(&p_bytes, &name_bytes) {
-                continue;
-            }
-
-            if let Ok(meta) = entry.metadata() {
-                if meta.is_dir() {
-                    sub_dirs.push(path);
-                } else {
-                    let sz = meta.len();
-                    local_dir_size += sz;
-                    record_file_stat(local_files, local_bytes, sz, state);
-                    local_top_files.push(sz, current_node, &name_bytes, local_arena);
+    } else {
+        // Fallback to std::fs::read_dir if CreateFileW fails (e.g., special permissions or device paths)
+        let dir_path = wide_path_stack.to_path_buf();
+        if let Ok(entries) = std::fs::read_dir(&dir_path) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_bytes = name.to_string_lossy().as_bytes().to_vec();
+                let orig_path_len = path_stack.len();
+                if !path_stack.ends_with(b"\\") && !path_stack.ends_with(b"/") {
+                    path_stack.push(b'\\');
+                }
+                path_stack.extend_from_slice(&name_bytes);
+                let excluded = matcher.is_excluded(path_stack.as_slice(), &name_bytes);
+                path_stack.truncate(orig_path_len);
+                if excluded {
+                    continue;
+                }
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_dir() {
+                        use std::os::windows::ffi::OsStrExt;
+                        let wide_name: Vec<u16> = name.encode_wide().collect();
+                        sub_dirs_wide.push(wide_name);
+                    } else {
+                        let sz = meta.len();
+                        local_dir_size += sz;
+                        record_file_stat(local_files, local_bytes, sz, state);
+                        local_top_files.push(sz, current_node, &name_bytes, local_arena);
+                    }
                 }
             }
         }
@@ -951,39 +1134,57 @@ fn scan_directory_tree_windows(
 
     local_arena.add_direct_bytes(current_node, local_dir_size);
 
-    if sub_dirs.len() > 1 && state.active_workers.load(Ordering::Relaxed) < state.config.threads {
-        let half = sub_dirs.split_off(sub_dirs.len() / 2);
-        for d in half {
-            worker.push(d);
+    // Work-stealing: construct PathBuf ONLY when delegating to another worker
+    if sub_dirs_wide.len() > 1
+        && state.active_workers.load(Ordering::Relaxed) < state.config.threads
+    {
+        let half = sub_dirs_wide.split_off(sub_dirs_wide.len() / 2);
+        for sub_w in half {
+            let prev_len = wide_path_stack.push_child(&sub_w);
+            let full_path = wide_path_stack.to_path_buf();
+            wide_path_stack.truncate(prev_len);
+            worker.push(full_path);
         }
         state.cvar.notify_all();
     }
 
-    for sub in sub_dirs {
-        let sub_name = sub.file_name().unwrap_or_default().to_string_lossy();
+    // Local recursion: push/pop onto wide_path_stack and path_stack with zero allocations
+    for sub_w in sub_dirs_wide {
+        transcode_utf16_to_utf8(&sub_w, utf8_scratch);
         let (child_node, next_rel_depth) = if rel_depth < state.config.max_depth {
             let next_d = rel_depth + 1;
-            let node = local_arena.add_node(current_node, next_d as u16, sub_name.as_bytes());
+            let node = local_arena.add_node(current_node, next_d as u16, utf8_scratch.as_slice());
             (node, next_d)
         } else {
             (current_node, rel_depth + 1)
         };
 
+        let orig_wide_len = wide_path_stack.push_child(&sub_w);
+        let orig_path_len = path_stack.len();
+        if !path_stack.ends_with(b"\\") && !path_stack.ends_with(b"/") {
+            path_stack.push(b'\\');
+        }
+        path_stack.extend_from_slice(utf8_scratch);
+
         dual_buffer.swap();
         scan_directory_tree_windows(
-            &sub,
             child_node,
             next_rel_depth,
             state,
             worker,
             dual_buffer,
-            scratch,
+            wide_path_stack,
+            path_stack,
+            utf8_scratch,
             local_arena,
             local_top_files,
             local_files,
             local_bytes,
         );
         dual_buffer.swap();
+
+        path_stack.truncate(orig_path_len);
+        wide_path_stack.truncate(orig_wide_len);
     }
 }
 
@@ -1000,7 +1201,11 @@ fn worker_loop(
     #[cfg(unix)]
     let mut path_stack = Vec::with_capacity(4096);
     #[cfg(windows)]
-    let mut scratch = Vec::with_capacity(512);
+    let mut wide_path_stack = WidePathStack::new();
+    #[cfg(windows)]
+    let mut path_stack = Vec::with_capacity(4096);
+    #[cfg(windows)]
+    let mut utf8_scratch = Vec::with_capacity(1024);
 
     #[cfg(target_os = "linux")]
     let mut batcher = if crate::sys::uring::IoUringBatcher::probe_supported() {
@@ -1090,19 +1295,31 @@ fn worker_loop(
             );
 
             #[cfg(windows)]
-            scan_directory_tree_windows(
-                &current_dir,
-                task_node,
-                rel_depth,
-                &state,
-                &worker,
-                &mut dual_buffer,
-                &mut scratch,
-                &mut local_arena,
-                &mut local_top_files,
-                &mut local_files,
-                &mut local_bytes,
-            );
+            {
+                wide_path_stack.set_root(&current_dir);
+                path_stack.clear();
+                path_stack.extend_from_slice(root_name);
+                while path_stack.len() > 3
+                    && (path_stack.ends_with(b"\\") || path_stack.ends_with(b"/"))
+                {
+                    path_stack.pop();
+                }
+
+                scan_directory_tree_windows(
+                    task_node,
+                    rel_depth,
+                    &state,
+                    &worker,
+                    &mut dual_buffer,
+                    &mut wide_path_stack,
+                    &mut path_stack,
+                    &mut utf8_scratch,
+                    &mut local_arena,
+                    &mut local_top_files,
+                    &mut local_files,
+                    &mut local_bytes,
+                );
+            }
         } else {
             // Flush remaining counts when transitioning to idle
             if local_files > 0 {
@@ -1410,6 +1627,7 @@ pub fn print_report(result: &ScanResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_is_excluded_dir() {

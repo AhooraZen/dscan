@@ -9,6 +9,6 @@ pub mod uring;
 pub use uring::*;
 
 #[cfg(windows)]
-mod windows;
+pub mod windows;
 #[cfg(windows)]
 pub use windows::*;
