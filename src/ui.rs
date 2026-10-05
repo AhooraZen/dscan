@@ -1,4 +1,5 @@
 use crate::format::format_bytes;
+use crate::scanner::ScanResult;
 use std::io::{IsTerminal, Write, stdout};
 
 pub const C_RESET: &str = "\x1b[0m";
@@ -37,6 +38,19 @@ pub fn get_terminal_width() -> usize {
     }
 }
 
+pub fn format_count(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    let rem = s.len() % 3;
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (i == rem || (i > rem && (i - rem).is_multiple_of(3))) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 pub fn truncate_path_tail(path: &str, max_len: usize) -> String {
     if path.len() <= max_len || max_len < 4 {
         return path.to_string();
@@ -53,6 +67,9 @@ pub fn truncate_path_tail(path: &str, max_len: usize) -> String {
 }
 
 pub fn make_bar(percent: f64, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
     let filled = ((percent / 100.0) * width as f64).round() as usize;
     let filled = filled.min(width);
     let empty = width.saturating_sub(filled);
@@ -67,23 +84,48 @@ pub fn make_bar(percent: f64, width: usize) -> String {
 }
 
 pub fn print_banner() {
-    println!(
-        "{C_BOLD}{C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮{C_RESET}"
-    );
-    println!(
-        "{C_BOLD}{C_CYAN}│  {C_GREEN}⚡ DSCAN{C_CYAN} — {C_BLUE}Ultra-Fast Modular Kernel Disk Space Analyzer{C_CYAN}                 │{C_RESET}"
-    );
-    println!(
-        "{C_BOLD}{C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯{C_RESET}"
-    );
+    let width = get_terminal_width().clamp(36, 80);
+
+    if width < 55 {
+        println!("{C_BOLD}{C_GREEN}⚡ DSCAN{C_RESET} — {C_CYAN}Disk Space Analyzer{C_RESET}");
+    } else {
+        let title = " ⚡ DSCAN — Ultra-Fast Disk Space Analyzer ";
+        let border_len = width.saturating_sub(title.chars().count() + 2);
+        let right_border = "─".repeat(border_len);
+
+        println!(
+            "{C_BOLD}{C_CYAN}╭─{C_GREEN}{}{C_CYAN}{}╮{C_RESET}",
+            title, right_border
+        );
+        println!(
+            "{C_BOLD}{C_CYAN}╰{}╯{C_RESET}",
+            "─".repeat(width.saturating_sub(2))
+        );
+    }
 }
 
 pub fn print_header(target: &str, threads: usize, excludes: &[String]) {
     print_banner();
-    println!(
-        " {C_BOLD}{C_BLUE}Target:{C_RESET} {C_CYAN}{}{C_RESET}  |  {C_BOLD}{C_BLUE}Threads:{C_RESET} {C_GREEN}{}{C_RESET}  |  {C_BOLD}{C_BLUE}Exclusions:{C_RESET} {C_DIM}{:?}{C_RESET}\n",
-        target, threads, excludes
-    );
+    let width = get_terminal_width().clamp(36, 80);
+
+    if width < 60 {
+        println!(
+            " {C_BLUE}Target:{C_RESET} {C_CYAN}{}{C_RESET} • {C_BLUE}Threads:{C_RESET} {C_GREEN}{}{C_RESET} • {C_BLUE}Excl:{C_RESET} {C_DIM}{}{C_RESET}\n",
+            target,
+            threads,
+            excludes.len()
+        );
+    } else {
+        let excl_str = if excludes.len() <= 3 {
+            format!("{:?}", excludes)
+        } else {
+            format!("{} patterns", excludes.len())
+        };
+        println!(
+            " {C_BOLD}{C_BLUE}Target:{C_RESET} {C_CYAN}{}{C_RESET}  |  {C_BOLD}{C_BLUE}Threads:{C_RESET} {C_GREEN}{}{C_RESET}  |  {C_BOLD}{C_BLUE}Exclusions:{C_RESET} {C_DIM}{}{C_RESET}\n",
+            target, threads, excl_str
+        );
+    }
 }
 
 pub fn render_spinner_line(
@@ -99,25 +141,31 @@ pub fn render_spinner_line(
 
     let term_width = get_terminal_width();
 
-    // Compact single-line format that NEVER wraps on mobile/Termux screens
-    if term_width < 70 {
+    if term_width < 45 {
+        let line = format!(
+            "\r\x1b[2K {C_CYAN}{}{C_RESET} {C_BOLD}{C_GREEN}{}{C_RESET}",
+            spinner_char,
+            format_bytes(bytes)
+        );
+        print!("{}", line);
+    } else if term_width < 75 {
         let line = format!(
             "\r\x1b[2K {C_CYAN}{}{C_RESET} {C_BOLD}{C_GREEN}{:>9}{C_RESET} | {C_BLUE}Files:{C_RESET} {:>6} | {C_BLUE}Wrk:{C_RESET} {:>2}",
             spinner_char,
             format_bytes(bytes),
-            files,
+            format_count(files),
             active_workers
         );
         print!("{}", line);
     } else {
-        let max_path_len = term_width.saturating_sub(48).max(10);
+        let max_path_len = term_width.saturating_sub(48).max(8);
         let truncated = truncate_path_tail(current_path, max_path_len);
 
         print!(
-            "\r\x1b[2K {C_CYAN}{}{C_RESET} {C_BOLD}{C_GREEN}{:>10}{C_RESET} | {C_BLUE}Files:{C_RESET} {:>7} | {C_BLUE}Active:{C_RESET} {:>2} | {C_DIM}{}{C_RESET}",
+            "\r\x1b[2K {C_CYAN}{}{C_RESET} {C_BOLD}{C_GREEN}{:>9}{C_RESET} | {C_BLUE}Files:{C_RESET} {:>7} | {C_BLUE}Active:{C_RESET} {:>2} | {C_DIM}{}{C_RESET}",
             spinner_char,
             format_bytes(bytes),
-            files,
+            format_count(files),
             active_workers,
             truncated
         );
@@ -132,9 +180,118 @@ pub fn clear_spinner_line() {
     }
 }
 
+pub fn render_report(result: &ScanResult) {
+    let width = get_terminal_width().clamp(36, 80);
+
+    // Summary Card
+    if width < 55 {
+        println!("{C_BOLD}{C_GREEN}╭─ Scan Complete ───────────────╮{C_RESET}");
+        println!(
+            "{C_BOLD}{C_GREEN}│{C_RESET}  {C_CYAN}Time:{C_RESET}   {C_YELLOW}{:<18.2?}{C_BOLD}{C_GREEN}│{C_RESET}",
+            result.elapsed
+        );
+        println!(
+            "{C_BOLD}{C_GREEN}│{C_RESET}  {C_CYAN}Total:{C_RESET}  {C_YELLOW}{:<18}{C_BOLD}{C_GREEN}│{C_RESET}",
+            format_bytes(result.total_bytes)
+        );
+        println!(
+            "{C_BOLD}{C_GREEN}│{C_RESET}  {C_CYAN}Files:{C_RESET}  {C_YELLOW}{:<18}{C_BOLD}{C_GREEN}│{C_RESET}",
+            format_count(result.total_files)
+        );
+        println!("{C_BOLD}{C_GREEN}╰───────────────────────────────╯{C_RESET}\n");
+    } else {
+        let border_fill = "─".repeat(width.saturating_sub(18));
+        println!("{C_BOLD}{C_GREEN}╭─ Scan Complete {border_fill}╮{C_RESET}");
+        println!(
+            "{C_BOLD}{C_GREEN}│{C_RESET}  {C_CYAN}✔ {C_YELLOW}{:.2?}{C_CYAN}  │  Total: {C_YELLOW}{:<10}{C_CYAN}  │  Files: {C_YELLOW}{:<8}{C_BOLD}{C_GREEN}│{C_RESET}",
+            result.elapsed,
+            format_bytes(result.total_bytes),
+            format_count(result.total_files)
+        );
+        println!(
+            "{C_BOLD}{C_GREEN}╰{}╯{C_RESET}\n",
+            "─".repeat(width.saturating_sub(2))
+        );
+    }
+
+    let divider = "─".repeat(width.saturating_sub(2));
+
+    // Dynamic bar width
+    let bar_width = if width < 50 {
+        6
+    } else if width < 65 {
+        8
+    } else if width < 80 {
+        12
+    } else {
+        16
+    };
+
+    // Top Directories
+    println!("{C_BOLD}{C_CYAN}📁 Top Directories By Recursive Size:{C_RESET}");
+    println!("{C_DIM}{divider}{C_RESET}");
+
+    if result.top_dirs.is_empty() {
+        println!("  {C_DIM}(no subdirectories found){C_RESET}");
+    } else {
+        let overhead = 10 + 2 + bar_width + 3; // size(10) + space(2) + bar + space(3)
+        let avail_path = width.saturating_sub(overhead).max(8);
+
+        for (path, size) in &result.top_dirs {
+            let pct = (*size as f64 / result.max_dir_size as f64) * 100.0;
+            let bar = make_bar(pct, bar_width);
+            let p_str = path.display().to_string();
+            let path_disp = truncate_path_tail(&p_str, avail_path);
+
+            println!(
+                "  {C_BOLD}{C_GREEN}{:>10}{C_RESET} {} {C_CYAN}{}{C_RESET}",
+                format_bytes(*size),
+                bar,
+                path_disp
+            );
+        }
+    }
+
+    // Top Largest Files
+    println!("\n{C_BOLD}{C_PURPLE}📄 Top Largest Files:{C_RESET}");
+    println!("{C_DIM}{divider}{C_RESET}");
+
+    if result.top_files.is_empty() {
+        println!("  {C_DIM}(no files found){C_RESET}");
+    } else {
+        let overhead = 10 + 2 + bar_width + 3;
+        let avail_path = width.saturating_sub(overhead).max(8);
+
+        for (size, path) in &result.top_files {
+            let pct = (*size as f64 / result.max_file_size as f64) * 100.0;
+            let bar = make_bar(pct, bar_width);
+            let p_str = path.display().to_string();
+            let path_disp = truncate_path_tail(&p_str, avail_path);
+
+            println!(
+                "  {C_BOLD}{C_YELLOW}{:>10}{C_RESET} {} {C_PURPLE}{}{C_RESET}",
+                format_bytes(*size),
+                bar,
+                path_disp
+            );
+        }
+    }
+    println!();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_count() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(1000), "1,000");
+        assert_eq!(format_count(7699), "7,699");
+        assert_eq!(format_count(1000000), "1,000,000");
+        assert_eq!(format_count(123456789), "123,456,789");
+    }
 
     #[test]
     fn test_truncate_path_tail_ascii() {
@@ -164,6 +321,14 @@ mod tests {
         let path = "photos/🚀_launch/🌌_nebula.jpg";
         let res = truncate_path_tail(path, 18);
         assert!(res.starts_with("..."));
+    }
+
+    #[test]
+    fn test_make_bar_widths() {
+        assert_eq!(make_bar(100.0, 0), "");
+        let bar = make_bar(50.0, 10);
+        assert!(bar.contains('█'));
+        assert!(bar.contains('░'));
     }
 
     #[test]

@@ -11,15 +11,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::cli::CliOptions;
-use crate::format::format_bytes;
 use crate::sys::{
     AT_STATX_DONT_SYNC, AT_SYMLINK_NOFOLLOW, DT_DIR, DT_LNK, DT_REG, DT_UNKNOWN, LinuxDirent64,
     S_IFDIR, S_IFMT, S_IFREG, STATX_BLOCKS, STATX_TYPE, SYS_GETDENTS64, open_dir,
 };
-use crate::ui::{
-    C_BOLD, C_CYAN, C_DIM, C_GREEN, C_PURPLE, C_RESET, C_YELLOW, clear_spinner_line, make_bar,
-    render_spinner_line,
-};
+use crate::ui::{clear_spinner_line, render_spinner_line};
 use crate::work_stealing::{Steal, Stealer, Worker, deque};
 
 pub struct AlignedBuffer {
@@ -705,59 +701,7 @@ pub fn run_scan(options: &CliOptions) -> Result<ScanResult, std::io::Error> {
 }
 
 pub fn print_report(result: &ScanResult) {
-    println!(
-        "{C_BOLD}{C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮{C_RESET}"
-    );
-    println!(
-        "{C_BOLD}{C_GREEN}│  {C_CYAN}✔ Scan Finished in {C_YELLOW}{:.2?}{C_CYAN}  │  Total Used: {C_YELLOW}{:<11}{C_CYAN}  │  Files: {C_YELLOW}{:<9}{C_GREEN}│{C_RESET}",
-        result.elapsed,
-        format_bytes(result.total_bytes),
-        result.total_files
-    );
-    println!(
-        "{C_BOLD}{C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯{C_RESET}\n"
-    );
-
-    println!("{C_BOLD}{C_CYAN}📁 Top Directories By Recursive Size:{C_RESET}");
-    println!(
-        "{C_DIM}────────────────────────────────────────────────────────────────────────────────{C_RESET}"
-    );
-
-    if result.top_dirs.is_empty() {
-        println!("  {C_DIM}(no subdirectories found){C_RESET}");
-    } else {
-        for (path, size) in &result.top_dirs {
-            let pct = (*size as f64 / result.max_dir_size as f64) * 100.0;
-            let bar = make_bar(pct, 16);
-            println!(
-                "  {C_BOLD}{C_GREEN}{:>10}{C_RESET}  {} {C_CYAN}{}{C_RESET}",
-                format_bytes(*size),
-                bar,
-                path.display()
-            );
-        }
-    }
-
-    println!("\n{C_BOLD}{C_PURPLE}📄 Top Largest Files:{C_RESET}");
-    println!(
-        "{C_DIM}────────────────────────────────────────────────────────────────────────────────{C_RESET}"
-    );
-
-    if result.top_files.is_empty() {
-        println!("  {C_DIM}(no files found){C_RESET}");
-    } else {
-        for (size, path) in &result.top_files {
-            let pct = (*size as f64 / result.max_file_size as f64) * 100.0;
-            let bar = make_bar(pct, 12);
-            println!(
-                "  {C_BOLD}{C_YELLOW}{:>10}{C_RESET}  {} {C_PURPLE}{}{C_RESET}",
-                format_bytes(*size),
-                bar,
-                path.display()
-            );
-        }
-    }
-    println!();
+    crate::ui::render_report(result);
 }
 
 #[cfg(test)]
