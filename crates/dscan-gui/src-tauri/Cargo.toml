@@ -1,0 +1,25 @@
+[package]
+name = "dscan-gui"
+version = "0.2.0"
+edition = "2024"
+authors = ["AhooraZen <ahoora935137@gmail.com>"]
+description = "Tauri v2 WinDirStat cushion treemap visualizer for dscan"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "dscan_gui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "dscan-gui"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+dscan-core = { path = "../../dscan-core" }
+tauri = { version = "2", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+parking_lot = "0.12"

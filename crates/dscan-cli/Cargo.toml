@@ -1,0 +1,14 @@
+[package]
+name = "dscan-cli"
+version = "0.2.0"
+edition = "2024"
+authors = ["AhooraZen <ahoora935137@gmail.com>"]
+description = "Fast, zero-dependency multi-threaded disk usage analyzer CLI"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "dscan"
+path = "src/main.rs"
+
+[dependencies]
+dscan-core = { path = "../dscan-core" }

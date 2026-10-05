@@ -1,22 +1,10 @@
-[package]
-name = "dscan"
-version = "0.2.0"
-edition = "2024"
-authors = ["AhooraZen <ahoora935137@gmail.com>"]
-description = "Fast, zero-dependency multi-threaded disk usage analyzer for Linux and Windows"
-readme = "README.md"
-license = "MIT OR Apache-2.0"
-keywords = ["disk", "du", "storage", "analyzer", "cli"]
-categories = ["command-line-utilities", "filesystem"]
-repository = "https://github.com/parchlinux/dscan"
-
-[lib]
-name = "dscan"
-path = "src/lib.rs"
-
-[[bin]]
-name = "dscan"
-path = "src/main.rs"
+[workspace]
+resolver = "3"
+members = [
+    "crates/dscan-core",
+    "crates/dscan-cli",
+    "crates/dscan-gui/src-tauri",
+]
 
 [profile.release]
 opt-level = 3
