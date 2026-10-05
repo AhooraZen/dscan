@@ -160,11 +160,67 @@ pub fn sys_statx(
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+pub const SYS_SCHED_SETAFFINITY: i64 = 203;
+
+#[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+pub const SYS_SCHED_SETAFFINITY: i64 = 122;
+
+#[cfg(any(target_arch = "arm", target_arch = "x86"))]
+pub const SYS_SCHED_SETAFFINITY: i64 = 241;
+
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "arm",
+    target_arch = "x86"
+)))]
+pub const SYS_SCHED_SETAFFINITY: i64 = 203;
+
+pub const PROT_READ: i32 = 0x1;
+pub const PROT_WRITE: i32 = 0x2;
+pub const MAP_PRIVATE: i32 = 0x02;
+pub const MAP_SHARED: i32 = 0x01;
+pub const MAP_ANONYMOUS: i32 = 0x20;
+pub const MAP_HUGETLB: i32 = 0x40000;
+pub const MAP_POPULATE: i32 = 0x08000;
+pub const MADV_HUGEPAGE: i32 = 14;
+pub const MAP_FAILED: *mut std::ffi::c_void = -1isize as *mut std::ffi::c_void;
+
 unsafe extern "C" {
     pub fn syscall(number: i64, ...) -> i64;
     pub fn open(path: *const std::ffi::c_char, flags: i32, ...) -> i32;
     pub fn close(fd: i32) -> i32;
     pub fn ioctl(fd: i32, request: u64, ...) -> i32;
+    pub fn madvise(addr: *mut std::ffi::c_void, length: usize, advice: i32) -> i32;
+    pub fn mmap(
+        addr: *mut std::ffi::c_void,
+        length: usize,
+        prot: i32,
+        flags: i32,
+        fd: i32,
+        offset: i64,
+    ) -> *mut std::ffi::c_void;
+    pub fn munmap(addr: *mut std::ffi::c_void, length: usize) -> i32;
+}
+
+/// Pin current thread to physical CPU core.
+pub fn pin_thread_to_core(core_id: usize) -> bool {
+    let num_cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .max(1);
+    let target = core_id % num_cores;
+    let mut mask = [0u64; 16]; // 1024-bit cpu_set
+    let word = target / 64;
+    let bit = target % 64;
+    if word < mask.len() {
+        mask[word] |= 1u64 << bit;
+    }
+    // SAFETY: SYS_SCHED_SETAFFINITY on current thread (tid = 0), mask size 128 bytes.
+    let ret = unsafe { syscall(SYS_SCHED_SETAFFINITY, 0, 128, mask.as_ptr() as i64) };
+    ret == 0
 }
 
 /// Open a directory with direct flags (O_DIRECTORY | O_CLOEXEC | O_NOATIME).
