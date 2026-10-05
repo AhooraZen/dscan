@@ -19,6 +19,7 @@ impl CliOptions {
 
     pub fn parse_from_args(args: &[String]) -> Option<Self> {
         let mut target_path = ".".to_string();
+        #[cfg(unix)]
         let mut custom_excludes = vec![
             "/proc".to_string(),
             "/sys".to_string(),
@@ -26,6 +27,15 @@ impl CliOptions {
             "/run".to_string(),
             "/tmp".to_string(),
             ".git".to_string(),
+        ];
+        #[cfg(windows)]
+        let mut custom_excludes = vec![
+            ".git".to_string(),
+            "$Recycle.Bin".to_string(),
+            "System Volume Information".to_string(),
+            "pagefile.sys".to_string(),
+            "hiberfil.sys".to_string(),
+            "dumpstack.log.sys".to_string(),
         ];
         let mut top_limit = 25;
         let mut max_depth = usize::MAX; // Unlimited by default: finds all deep culprit folders!
@@ -167,6 +177,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_cli_target_protection_for_tmp() {
         let args = vec!["dscan".to_string(), "/tmp".to_string()];
         let opts = CliOptions::parse_from_args(&args).expect("should parse");
