@@ -21,6 +21,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
             bin_name: dscan
             asset_name: dscan-linux-x86_64.tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            bin_name: dscan
+            asset_name: dscan-linux-aarch64.tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bin_name: dscan.exe
@@ -35,7 +39,18 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install aarch64 cross-linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Build dscan-cli
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: cargo build --release -p dscan --target ${{ matrix.target }}
 
       - name: Package Linux artifact
@@ -58,7 +73,7 @@ jobs:
           path: ${{ matrix.asset_name }}
 
   build-desktop-gui:
-    name: Build Desktop GUI (Linux)
+    name: Build Desktop GUI (Linux x64)
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
@@ -77,12 +92,17 @@ jobs:
       - name: Build frontend
         run: |
           cd crates/dscan-gui/ui
-          bun install
+          bun install --frozen-lockfile
           bun run build
           cd ../../..
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: gui-linux-x64
 
       - name: Build Tauri GUI
         run: |
@@ -98,7 +118,7 @@ jobs:
           path: dscan-gui-linux-x86_64.tar.gz
 
   build-desktop-gui-windows:
-    name: Build Desktop GUI (Windows)
+    name: Build Desktop GUI (Windows x64)
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -113,12 +133,17 @@ jobs:
         shell: pwsh
         run: |
           cd crates/dscan-gui/ui
-          bun install
+          bun install --frozen-lockfile
           bun run build
           cd ../../..
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: gui-win-x64
 
       - name: Build Tauri GUI Windows
         shell: pwsh
@@ -135,7 +160,7 @@ jobs:
           path: dscan-gui-windows-x64.zip
 
   build-android-gui:
-    name: Build Android GUI (APK)
+    name: Build Android GUI (APK arm64 & armv7)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -160,34 +185,51 @@ jobs:
       - name: Build frontend
         run: |
           cd crates/dscan-gui/ui
-          bun install
+          bun install --frozen-lockfile
           bun run build
           cd ../../..
 
       - name: Install Rust toolchain & Android targets
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2.0.0" --locked
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: android-gui
 
-      - name: Init & Build Tauri Android
-        env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+      - name: Install pre-built Tauri CLI via cargo-binstall
         run: |
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall --no-confirm tauri-cli@^2.0.0
+
+      - name: Init & Build Tauri Android (arm64-v8a & armeabi-v7a)
+        run: |
+          export ANDROID_NDK_HOME="/usr/local/lib/android/sdk/ndk/26.1.10909125"
+          export NDK_HOME="$ANDROID_NDK_HOME"
+          export PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           cd crates/dscan-gui/src-tauri
           cargo tauri android init
-          cargo tauri android build --apk --target aarch64
+          cargo tauri android build --apk --target aarch64,armv7
           cd ../../..
-          find crates/dscan-gui -name "*.apk" -exec cp {} ./dscan-gui-android-arm64.apk \; || true
+          find crates/dscan-gui -name "*aarch64*signed*.apk" -o -name "*aarch64*.apk" -o -name "*arm64*.apk" | head -n 1 | xargs -I {} cp {} ./dscan-gui-android-arm64-v8a.apk || true
+          find crates/dscan-gui -name "*armv7*signed*.apk" -o -name "*armv7*.apk" -o -name "*armeabi*.apk" | head -n 1 | xargs -I {} cp {} ./dscan-gui-android-armeabi-v7a.apk || true
+          ls -lh *.apk || true
 
-      - name: Upload Android APK
-        if: hashFiles('dscan-gui-android-arm64.apk') != ''
+      - name: Upload Android arm64-v8a APK
+        if: hashFiles('dscan-gui-android-arm64-v8a.apk') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: dscan-gui-android-arm64.apk
-          path: dscan-gui-android-arm64.apk
+          name: dscan-gui-android-arm64-v8a.apk
+          path: dscan-gui-android-arm64-v8a.apk
+
+      - name: Upload Android armeabi-v7a APK
+        if: hashFiles('dscan-gui-android-armeabi-v7a.apk') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: dscan-gui-android-armeabi-v7a.apk
+          path: dscan-gui-android-armeabi-v7a.apk
 
   publish-github-release:
     name: Publish GitHub Release
