@@ -213,23 +213,17 @@ jobs:
           cargo tauri android init
           cargo tauri android build --apk --target aarch64 --target armv7
           cd ../../..
-          find crates/dscan-gui -name "*aarch64*signed*.apk" -o -name "*aarch64*.apk" -o -name "*arm64*.apk" | head -n 1 | xargs -I {} cp {} ./dscan-gui-android-arm64-v8a.apk || true
-          find crates/dscan-gui -name "*armv7*signed*.apk" -o -name "*armv7*.apk" -o -name "*armeabi*.apk" | head -n 1 | xargs -I {} cp {} ./dscan-gui-android-armeabi-v7a.apk || true
+          find crates/dscan-gui -name "*aarch64*.apk" -o -name "*arm64*.apk" | head -n 1 | xargs -I {} cp {} ./dscan-gui-android-arm64-v8a.apk || true
+          find crates/dscan-gui -name "*armv7*.apk" -o -name "*armeabi*.apk" | head -n 1 | xargs -I {} cp {} ./dscan-gui-android-armeabi-v7a.apk || true
+          find crates/dscan-gui -name "*.apk" -exec cp {} ./ \; || true
           ls -lh *.apk || true
 
-      - name: Upload Android arm64-v8a APK
-        if: hashFiles('dscan-gui-android-arm64-v8a.apk') != ''
+      - name: Upload Android APKs
+        if: hashFiles('*.apk') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: dscan-gui-android-arm64-v8a.apk
-          path: dscan-gui-android-arm64-v8a.apk
-
-      - name: Upload Android armeabi-v7a APK
-        if: hashFiles('dscan-gui-android-armeabi-v7a.apk') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: dscan-gui-android-armeabi-v7a.apk
-          path: dscan-gui-android-armeabi-v7a.apk
+          name: android-apks
+          path: "*.apk"
 
   publish-github-release:
     name: Publish GitHub Release

@@ -1,4 +1,5 @@
 use std::path::Path;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::process::Command;
 
 use dscan_core::{ScanOptions, ScanSession};
@@ -128,7 +129,7 @@ pub fn pause_scan(state: State<'_, AppState>) -> Result<bool, String> {
 #[tauri::command]
 pub fn open_in_file_manager(path: String) -> Result<(), String> {
     let p = Path::new(&path);
-    let target_dir = if p.is_dir() {
+    let _target_dir = if p.is_dir() {
         p
     } else {
         p.parent().unwrap_or(Path::new("/"))
@@ -137,14 +138,14 @@ pub fn open_in_file_manager(path: String) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         Command::new("xdg-open")
-            .arg(target_dir)
+            .arg(_target_dir)
             .spawn()
             .map_err(|e| format!("Failed to open file manager: {e}"))?;
     }
     #[cfg(target_os = "windows")]
     {
         Command::new("explorer")
-            .arg(target_dir)
+            .arg(_target_dir)
             .spawn()
             .map_err(|e| format!("Failed to open explorer: {e}"))?;
     }
