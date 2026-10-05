@@ -6,7 +6,6 @@ use gpui::{
 use gpui_kit::base::StyledExt as _;
 
 use crate::app::DscanApp;
-use crate::system::reveal_in_file_manager;
 use crate::theme;
 use dscan_core::format_bytes;
 
@@ -35,10 +34,11 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::TEXT_MUTED)
                 .justify_between()
-                .child(div().w(px(240.0)).child("Name"))
-                .child(div().w(px(80.0)).text_right().child("Size"))
-                .child(div().w(px(60.0)).text_right().child("%"))
-                .child(div().w(px(60.0)).text_right().child("Items")),
+                .child(div().w(px(220.0)).child("Name"))
+                .child(div().w(px(70.0)).text_right().child("Size"))
+                .child(div().w(px(50.0)).text_right().child("%"))
+                .child(div().w(px(50.0)).text_right().child("Items"))
+                .child(div().w(px(50.0)).text_center().child("Actions")),
         )
         .child(
             // Content region
@@ -161,19 +161,19 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                             )
                             .on_mouse_down(
                                 MouseButton::Right,
-                                cx.listener(move |this, _, _window, _cx| {
-                                    let path = this
-                                        .state
-                                        .target_path
-                                        .join(&this.state.raw_nodes[node_id as usize].name);
-                                    let _ = reveal_in_file_manager(&path);
-                                }),
+                                cx.listener(
+                                    move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                                        let px_x: f32 = event.position.x.into();
+                                        let px_y: f32 = event.position.y.into();
+                                        this.open_context_menu(node_id, px_x, px_y, cx);
+                                    },
+                                ),
                             )
                             .child(
                                 // Name column with indent and expand toggle
                                 div()
                                     .h_flex()
-                                    .w(px(240.0))
+                                    .w(px(220.0))
                                     .items_center()
                                     .pl(px(indent))
                                     .gap_1()
@@ -217,7 +217,7 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                             )
                             .child(
                                 div()
-                                    .w(px(80.0))
+                                    .w(px(70.0))
                                     .text_right()
                                     .text_color(theme::TEXT_MUTED)
                                     .child(format_bytes(node.total_bytes)),
@@ -225,13 +225,13 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                             .child(
                                 div()
                                     .h_flex()
-                                    .w(px(60.0))
+                                    .w(px(50.0))
                                     .justify_end()
                                     .items_center()
                                     .gap_1()
                                     .child(
                                         div()
-                                            .w(px(24.0))
+                                            .w(px(20.0))
                                             .h(px(4.0))
                                             .rounded_sm()
                                             .bg(theme::BORDER_DARK)
@@ -240,8 +240,8 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                                     .h_full()
                                                     .rounded_sm()
                                                     .bg(theme::ACCENT_BLUE)
-                                                    .w(px((24.0 * (pct / 100.0) as f32)
-                                                        .clamp(1.0, 24.0))),
+                                                    .w(px((20.0 * (pct / 100.0) as f32)
+                                                        .clamp(1.0, 20.0))),
                                             ),
                                     )
                                     .child(
@@ -253,7 +253,7 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                             )
                             .child(
                                 div()
-                                    .w(px(60.0))
+                                    .w(px(50.0))
                                     .text_right()
                                     .text_color(theme::TEXT_DIM)
                                     .child(if node.is_dir {
@@ -261,6 +261,47 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                     } else {
                                         "-".to_string()
                                     }),
+                            )
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .w(px(50.0))
+                                    .justify_center()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .id(("reveal-btn", node_id))
+                                            .cursor_pointer()
+                                            .px_1()
+                                            .rounded_sm()
+                                            .hover(|h| h.bg(theme::SURFACE_HOVER))
+                                            .text_size(px(11.0))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, _window, cx| {
+                                                    this.reveal_node(node_id, cx);
+                                                }),
+                                            )
+                                            .child("📂"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id(("trash-btn", node_id))
+                                            .cursor_pointer()
+                                            .px_1()
+                                            .rounded_sm()
+                                            .hover(|h| h.bg(theme::SURFACE_HOVER))
+                                            .text_size(px(11.0))
+                                            .text_color(theme::ACCENT_RED)
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, _window, cx| {
+                                                    this.request_trash_node(node_id, cx);
+                                                }),
+                                            )
+                                            .child("🗑"),
+                                    ),
                             )
                     }))
                 }),

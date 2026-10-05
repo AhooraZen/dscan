@@ -48,19 +48,110 @@ pub fn detect_drives() -> Vec<DriveInfo> {
     drives
 }
 
+/// Safety guard preventing accidental deletion of critical system files or roots
+pub fn is_safe_to_trash(path: &Path, scan_root: &Path) -> Result<(), &'static str> {
+    // Disallow root ("/", "C:\")
+    if path.parent().is_none() {
+        return Err("Cannot trash filesystem root");
+    }
+    // Disallow scan root itself
+    if path == scan_root {
+        return Err("Cannot trash scan root directory");
+    }
+    // Disallow home root directory
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+        && path == Path::new(&home)
+    {
+        return Err("Cannot trash user home directory");
+    }
+    // Disallow essential system directories
+    let p_str = path.to_string_lossy();
+    let forbidden = [
+        "/bin",
+        "/sbin",
+        "/usr",
+        "/etc",
+        "/boot",
+        "/dev",
+        "/proc",
+        "/sys",
+        "C:\\Windows",
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
+    ];
+    for f in forbidden {
+        if p_str.starts_with(f)
+            && (p_str.len() == f.len()
+                || p_str.as_bytes()[f.len()] == b'/'
+                || p_str.as_bytes()[f.len()] == b'\\')
+        {
+            return Err("Cannot trash critical operating system path");
+        }
+    }
+    Ok(())
+}
+
 /// Open path in desktop environment native file manager
-pub fn reveal_in_file_manager(path: &Path) -> Result<(), std::io::Error> {
-    let target = if path.is_file() {
-        path.parent().unwrap_or(path)
-    } else {
-        path
-    };
-    open::that(target).map_err(|e| std::io::Error::other(e.to_string()))
+pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(format!("/select,\"{}\"", path.display()))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path.to_string_lossy()])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(parent) = path.parent() {
+            open::that(parent).map_err(|e| e.to_string())?;
+        } else {
+            open::that(path).map_err(|e| e.to_string())?;
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        open::that(path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Move file or directory to OS trash/recycle bin safely
+pub fn move_to_trash(path: &Path, scan_root: &Path) -> Result<(), String> {
+    is_safe_to_trash(path, scan_root).map_err(ToString::to_string)?;
+    trash::delete(path).map_err(|e| format!("Failed to move to trash: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_safe_to_trash_guards() {
+        let scan_root = Path::new("/home/user/workspace");
+
+        // Root cannot be trashed
+        assert!(is_safe_to_trash(Path::new("/"), scan_root).is_err());
+
+        // Scan root itself cannot be trashed
+        assert!(is_safe_to_trash(scan_root, scan_root).is_err());
+
+        // System directories cannot be trashed
+        assert!(is_safe_to_trash(Path::new("/usr/bin/python3"), scan_root).is_err());
+        assert!(is_safe_to_trash(Path::new("/etc/passwd"), scan_root).is_err());
+        assert!(is_safe_to_trash(Path::new("/bin/ls"), scan_root).is_err());
+        assert!(is_safe_to_trash(Path::new("C:\\Windows\\System32"), scan_root).is_err());
+
+        // Normal path inside scan root is safe
+        let safe_file = Path::new("/home/user/workspace/target/debug/build.log");
+        assert!(is_safe_to_trash(safe_file, scan_root).is_ok());
+    }
 
     #[test]
     fn test_detect_drives_non_empty() {

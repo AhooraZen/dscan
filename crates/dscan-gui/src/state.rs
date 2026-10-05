@@ -1,9 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dscan_core::scanner::ScanOptions;
-use dscan_core::snapshot::{ExtensionStatDto, ScanProgressDto, ScanSession, TreemapNodeDto};
+use dscan_core::snapshot::{
+    ExtensionStatDto, ScanProgressDto, ScanSession, TreemapNodeDto, build_extension_breakdown,
+};
 
 use crate::system::{DriveInfo, detect_drives};
 use crate::treemap::squarify::{LaidOutTreemapNode, Rect, build_hierarchical_layout};
@@ -212,6 +214,136 @@ impl AppState {
             self.selected_extension = Some(ext.to_string());
         }
     }
+
+    /// Reconstruct filesystem path for a node by traversing ancestor hierarchy
+    pub fn node_full_path(&self, id: u32) -> PathBuf {
+        if id == 0 {
+            return self.target_path.clone();
+        }
+        let mut segments = Vec::new();
+        let mut curr_id = id;
+        while curr_id != 0 {
+            if let Some(node) = self.find_node(curr_id) {
+                segments.push(node.name.clone());
+                if node.parent_id == curr_id {
+                    break;
+                }
+                curr_id = node.parent_id;
+            } else {
+                break;
+            }
+        }
+        segments.reverse();
+        let mut full = self.target_path.clone();
+        for seg in segments {
+            full.push(seg);
+        }
+        full
+    }
+
+    /// Prune node and all its descendants from in-memory state, subtracting size from ancestors
+    pub fn prune_node_and_bubble_size(&mut self, node_id: usize) {
+        if node_id >= self.raw_nodes.len() {
+            return;
+        }
+
+        if node_id == 0 {
+            self.raw_nodes.clear();
+            self.layout_nodes.clear();
+            self.extensions.clear();
+            self.selected_node_id = None;
+            self.hovered_node_id = None;
+            self.expanded_dirs.clear();
+            return;
+        }
+
+        let target_u32 = node_id as u32;
+        let pruned_bytes = self.raw_nodes[node_id].total_bytes;
+
+        // 1. Subtract pruned_bytes from ancestors
+        let mut curr_parent = self.raw_nodes[node_id].parent_id;
+        let mut visited = HashSet::new();
+        while (curr_parent as usize) < self.raw_nodes.len() && visited.insert(curr_parent) {
+            self.raw_nodes[curr_parent as usize].total_bytes = self.raw_nodes[curr_parent as usize]
+                .total_bytes
+                .saturating_sub(pruned_bytes);
+            if curr_parent == 0 {
+                break;
+            }
+            curr_parent = self.raw_nodes[curr_parent as usize].parent_id;
+        }
+
+        // 2. Collect all descendant IDs
+        let mut to_remove = HashSet::new();
+        let mut stack = vec![target_u32];
+        while let Some(curr) = stack.pop() {
+            if to_remove.insert(curr)
+                && let Some(node) = self.raw_nodes.get(curr as usize)
+            {
+                for &cid in &node.children_ids {
+                    stack.push(cid);
+                }
+            }
+        }
+
+        // 3. Remove target from parent's children_ids
+        let parent_id = self.raw_nodes[node_id].parent_id;
+        if let Some(parent_node) = self.raw_nodes.get_mut(parent_id as usize) {
+            parent_node.children_ids.retain(|&cid| cid != target_u32);
+        }
+
+        // 4. Rebuild raw_nodes with updated contiguous IDs
+        let mut old_to_new = HashMap::new();
+        let mut new_nodes =
+            Vec::with_capacity(self.raw_nodes.len().saturating_sub(to_remove.len()));
+        for (old_idx, node) in self.raw_nodes.iter().enumerate() {
+            let old_id = old_idx as u32;
+            if !to_remove.contains(&old_id) {
+                let new_id = new_nodes.len() as u32;
+                old_to_new.insert(old_id, new_id);
+                new_nodes.push(node.clone());
+            }
+        }
+
+        for node in &mut new_nodes {
+            node.id = *old_to_new.get(&node.id).unwrap_or(&0);
+            node.parent_id = *old_to_new.get(&node.parent_id).unwrap_or(&0);
+            node.children_ids = node
+                .children_ids
+                .iter()
+                .filter_map(|cid| old_to_new.get(cid).copied())
+                .collect();
+        }
+        self.raw_nodes = new_nodes;
+
+        // 5. Update state pointers
+        self.expanded_dirs = self
+            .expanded_dirs
+            .iter()
+            .filter_map(|id| old_to_new.get(id).copied())
+            .collect();
+        self.selected_node_id = self
+            .selected_node_id
+            .and_then(|id| old_to_new.get(&id).copied());
+        self.hovered_node_id = self
+            .hovered_node_id
+            .and_then(|id| old_to_new.get(&id).copied());
+
+        // 6. Rebuild squarified layout
+        self.rebuild_layout();
+
+        // 7. Recompute extension breakdown
+        let mut ext_map: HashMap<String, (u64, u64)> = HashMap::new();
+        for node in &self.raw_nodes {
+            if !node.is_dir && !node.extension.is_empty() {
+                let entry = ext_map.entry(node.extension.clone()).or_insert((0, 0));
+                entry.0 += node.total_bytes;
+                entry.1 += 1;
+            }
+        }
+        let root_total = self.raw_nodes.first().map(|n| n.total_bytes).unwrap_or(0);
+        self.extensions = build_extension_breakdown(&ext_map, root_total, 16);
+    }
 }
 
 #[cfg(test)]
@@ -239,5 +371,86 @@ mod tests {
         assert_eq!(state.selected_extension.as_deref(), Some(".rs"));
         state.toggle_extension_filter(".rs");
         assert_eq!(state.selected_extension, None);
+    }
+
+    #[test]
+    fn test_prune_node_and_bubble_size() {
+        let mut state = AppState::new();
+        state.raw_nodes = vec![
+            TreemapNodeDto {
+                id: 0,
+                parent_id: 0,
+                name: "root".to_string(),
+                total_bytes: 1000,
+                direct_bytes: 0,
+                rel_depth: 0,
+                is_dir: true,
+                extension: String::new(),
+                children_ids: vec![1, 4],
+            },
+            TreemapNodeDto {
+                id: 1,
+                parent_id: 0,
+                name: "src".to_string(),
+                total_bytes: 600,
+                direct_bytes: 0,
+                rel_depth: 1,
+                is_dir: true,
+                extension: String::new(),
+                children_ids: vec![2, 3],
+            },
+            TreemapNodeDto {
+                id: 2,
+                parent_id: 1,
+                name: "main.rs".to_string(),
+                total_bytes: 400,
+                direct_bytes: 400,
+                rel_depth: 2,
+                is_dir: false,
+                extension: ".rs".to_string(),
+                children_ids: vec![],
+            },
+            TreemapNodeDto {
+                id: 3,
+                parent_id: 1,
+                name: "lib.rs".to_string(),
+                total_bytes: 200,
+                direct_bytes: 200,
+                rel_depth: 2,
+                is_dir: false,
+                extension: ".rs".to_string(),
+                children_ids: vec![],
+            },
+            TreemapNodeDto {
+                id: 4,
+                parent_id: 0,
+                name: "Cargo.toml".to_string(),
+                total_bytes: 400,
+                direct_bytes: 400,
+                rel_depth: 1,
+                is_dir: false,
+                extension: ".toml".to_string(),
+                children_ids: vec![],
+            },
+        ];
+        state.selected_node_id = Some(2);
+
+        // Prune main.rs (node 2, 400 bytes)
+        state.prune_node_and_bubble_size(2);
+
+        // Check sizes bubbled up
+        assert_eq!(state.raw_nodes[0].total_bytes, 600); // Root: 1000 - 400 = 600
+        assert_eq!(state.raw_nodes[1].total_bytes, 200); // src: 600 - 400 = 200
+
+        // Remaining nodes count: 4
+        assert_eq!(state.raw_nodes.len(), 4);
+        // Node 2 was selected and pruned, so selected_node_id should now be None
+        assert_eq!(state.selected_node_id, None);
+
+        // Check extensions: .rs should now be 200 bytes, .toml 400 bytes
+        let rs_stat = state.extensions.iter().find(|e| e.extension == ".rs");
+        assert!(rs_stat.is_some());
+        assert_eq!(rs_stat.unwrap().total_bytes, 200);
+        assert_eq!(rs_stat.unwrap().file_count, 1);
     }
 }

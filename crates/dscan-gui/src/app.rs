@@ -1,6 +1,9 @@
+use std::path::PathBuf;
+
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window,
-    div,
+    Context, FontWeight, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
+    Render, Styled as _, Window, div, px,
 };
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::resizable::*;
@@ -15,10 +18,28 @@ use crate::views::title_bar::render_title_bar;
 
 gpui_kit::actions!(dscan, [OpenPath, TogglePause, CancelScan]);
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingTrash {
+    pub node_id: u32,
+    pub name: String,
+    pub total_bytes: u64,
+    pub path: PathBuf,
+    pub error_msg: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextMenuState {
+    pub node_id: u32,
+    pub pos_x: f32,
+    pub pos_y: f32,
+}
+
 pub struct DscanApp {
     pub state: AppState,
     pub threads: usize,
     pub pacman_phase: usize,
+    pub context_menu: Option<ContextMenuState>,
+    pub pending_trash: Option<PendingTrash>,
 }
 
 impl DscanApp {
@@ -31,6 +52,8 @@ impl DscanApp {
             state: AppState::new(),
             threads,
             pacman_phase: 0,
+            context_menu: None,
+            pending_trash: None,
         }
     }
 
@@ -112,10 +135,77 @@ impl DscanApp {
     }
 
     pub fn handle_treemap_click(&mut self, px: f32, py: f32, cx: &mut Context<Self>) {
+        self.close_context_menu(cx);
         if let Some(id) = self.state.hit_test(px, py) {
             self.state.selected_node_id = Some(id);
             cx.notify();
         }
+    }
+
+    pub fn open_context_menu(
+        &mut self,
+        node_id: u32,
+        pos_x: f32,
+        pos_y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.context_menu = Some(ContextMenuState {
+            node_id,
+            pos_x,
+            pos_y,
+        });
+        cx.notify();
+    }
+
+    pub fn close_context_menu(&mut self, cx: &mut Context<Self>) {
+        if self.context_menu.is_some() {
+            self.context_menu = None;
+            cx.notify();
+        }
+    }
+
+    pub fn reveal_node(&mut self, node_id: u32, cx: &mut Context<Self>) {
+        let path = self.state.node_full_path(node_id);
+        let _ = crate::system::reveal_in_file_manager(&path);
+        self.close_context_menu(cx);
+    }
+
+    pub fn request_trash_node(&mut self, node_id: u32, cx: &mut Context<Self>) {
+        self.context_menu = None;
+        if let Some(node) = self.state.find_node(node_id) {
+            let path = self.state.node_full_path(node_id);
+            self.pending_trash = Some(PendingTrash {
+                node_id,
+                name: node.name.clone(),
+                total_bytes: node.total_bytes,
+                path,
+                error_msg: None,
+            });
+            cx.notify();
+        }
+    }
+
+    pub fn confirm_trash(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref pending) = self.pending_trash {
+            match crate::system::move_to_trash(&pending.path, &self.state.target_path) {
+                Ok(()) => {
+                    let id = pending.node_id;
+                    self.pending_trash = None;
+                    self.state.prune_node_and_bubble_size(id as usize);
+                }
+                Err(err) => {
+                    if let Some(ref mut p) = self.pending_trash {
+                        p.error_msg = Some(err);
+                    }
+                }
+            }
+            cx.notify();
+        }
+    }
+
+    pub fn cancel_trash(&mut self, cx: &mut Context<Self>) {
+        self.pending_trash = None;
+        cx.notify();
     }
 
     pub fn poll_progress(&mut self, cx: &mut Context<Self>) {
@@ -135,7 +225,7 @@ impl Render for DscanApp {
         // Treemap gets bottom half of available vertical space
         self.state.update_layout_size(avail_w, avail_h * 0.5);
 
-        div()
+        let mut root = div()
             .id("dscan-app-root")
             .size_full()
             .v_flex()
@@ -161,6 +251,14 @@ impl Render for DscanApp {
                     this.cancel_scan(cx);
                 }
             }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _window, cx| {
+                    if this.context_menu.is_some() {
+                        this.close_context_menu(cx);
+                    }
+                }),
+            )
             .child(render_title_bar(self, cx))
             .child(
                 div().flex_1().w_full().child(
@@ -173,6 +271,241 @@ impl Render for DscanApp {
                         .child(render_cushion_treemap(self, cx).into_any_element()),
                 ),
             )
-            .child(render_status_bar(self, cx))
+            .child(render_status_bar(self, cx));
+
+        // Render context menu popup if active
+        if let Some(ref menu) = self.context_menu {
+            let node_id = menu.node_id;
+            let menu_w = 200.0;
+            let menu_h = 70.0;
+            let x = menu.pos_x.min(avail_w - menu_w).max(8.0);
+            let y = menu.pos_y.min(total_h - menu_h).max(8.0);
+
+            root = root.child(
+                div()
+                    .id("app-context-menu")
+                    .absolute()
+                    .left(px(x))
+                    .top(px(y))
+                    .w(px(menu_w))
+                    .py(px(4.0))
+                    .rounded_md()
+                    .bg(theme::SURFACE_DARK)
+                    .border_1()
+                    .border_color(theme::BORDER_LIGHT)
+                    .child(
+                        div()
+                            .id("ctx-reveal-btn")
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .px_3()
+                            .py(px(5.0))
+                            .cursor_pointer()
+                            .hover(|h| h.bg(theme::SURFACE_HOVER))
+                            .text_size(px(12.0))
+                            .text_color(theme::TEXT_PRIMARY)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _window, cx| {
+                                    this.reveal_node(node_id, cx);
+                                }),
+                            )
+                            .child("📂 Reveal in File Manager"),
+                    )
+                    .child(
+                        div()
+                            .id("ctx-trash-btn")
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .px_3()
+                            .py(px(5.0))
+                            .cursor_pointer()
+                            .hover(|h| h.bg(theme::SURFACE_HOVER))
+                            .text_size(px(12.0))
+                            .text_color(theme::ACCENT_RED)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _window, cx| {
+                                    this.request_trash_node(node_id, cx);
+                                }),
+                            )
+                            .child("🗑 Move to Trash"),
+                    ),
+            );
+        }
+
+        // Render confirmation dialog modal if active
+        if let Some(ref pending) = self.pending_trash {
+            let name = pending.name.clone();
+            let path_str = pending.path.to_string_lossy().to_string();
+            let size_str = dscan_core::format_bytes(pending.total_bytes);
+            let err_opt = pending.error_msg.clone();
+
+            root = root.child(
+                div()
+                    .id("trash-confirm-modal-backdrop")
+                    .absolute()
+                    .inset_0()
+                    .bg(gpui::Rgba {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 0.7,
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .id("trash-confirm-modal")
+                            .v_flex()
+                            .w(px(440.0))
+                            .p_6()
+                            .gap_4()
+                            .rounded_lg()
+                            .bg(theme::SURFACE_DARK)
+                            .border_1()
+                            .border_color(theme::BORDER_LIGHT)
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .text_size(px(16.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme::TEXT_PRIMARY)
+                                    .child(div().text_color(theme::ACCENT_RED).child("🗑"))
+                                    .child("Move to Trash?"),
+                            )
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .gap_2()
+                                    .text_size(px(12.0))
+                                    .text_color(theme::TEXT_MUTED)
+                                    .child(
+                                        div()
+                                            .h_flex()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .w(px(45.0))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child("Name:"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .text_color(theme::TEXT_PRIMARY)
+                                                    .child(name),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .h_flex()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .w(px(45.0))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child("Path:"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(theme::TEXT_DIM)
+                                                    .text_size(px(11.0))
+                                                    .child(path_str),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .h_flex()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .w(px(45.0))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child("Size:"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(theme::ACCENT_AMBER)
+                                                    .child(size_str),
+                                            ),
+                                    ),
+                            )
+                            .when_some(err_opt, |d, err| {
+                                d.child(
+                                    div()
+                                        .p_2()
+                                        .rounded_sm()
+                                        .bg(gpui::Rgba {
+                                            r: 0.9,
+                                            g: 0.2,
+                                            b: 0.2,
+                                            a: 0.2,
+                                        })
+                                        .border_1()
+                                        .border_color(theme::ACCENT_RED)
+                                        .text_color(theme::ACCENT_RED)
+                                        .text_size(px(11.0))
+                                        .child(format!("Error: {err}")),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .justify_end()
+                                    .gap_3()
+                                    .mt_2()
+                                    .child(
+                                        div()
+                                            .id("cancel-trash-btn")
+                                            .px_4()
+                                            .py(px(6.0))
+                                            .rounded_md()
+                                            .bg(theme::SURFACE_HOVER)
+                                            .hover(|h| h.bg(theme::BORDER_LIGHT))
+                                            .cursor_pointer()
+                                            .text_size(px(12.0))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme::TEXT_PRIMARY)
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _window, cx| {
+                                                    this.cancel_trash(cx);
+                                                }),
+                                            )
+                                            .child("Cancel"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("confirm-trash-btn")
+                                            .px_4()
+                                            .py(px(6.0))
+                                            .rounded_md()
+                                            .bg(theme::ACCENT_RED)
+                                            .hover(|h| h.opacity(0.85))
+                                            .cursor_pointer()
+                                            .text_size(px(12.0))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(theme::TEXT_PRIMARY)
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _window, cx| {
+                                                    this.confirm_trash(cx);
+                                                }),
+                                            )
+                                            .child("Move to Trash"),
+                                    ),
+                            ),
+                    ),
+            );
+        }
+
+        root
     }
 }

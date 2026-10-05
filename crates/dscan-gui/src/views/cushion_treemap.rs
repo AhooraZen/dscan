@@ -6,7 +6,6 @@ use gpui::{
 use gpui_kit::base::StyledExt as _;
 
 use crate::app::DscanApp;
-use crate::system::reveal_in_file_manager;
 use crate::theme;
 use crate::treemap::CushionTreemapElement;
 use dscan_core::format_bytes;
@@ -48,21 +47,17 @@ pub fn render_cushion_treemap(app: &DscanApp, cx: &Context<DscanApp>) -> impl In
         )
         .on_mouse_down(
             MouseButton::Right,
-            cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
+            cx.listener(|this, event: &MouseDownEvent, _window, cx| {
                 let px_x: f32 = event.position.x.into();
                 let px_y: f32 = event.position.y.into();
-                if let Some(node) = this
-                    .state
-                    .hit_test(px_x, px_y)
-                    .and_then(|id| this.state.find_node(id))
-                {
-                    let path = this.state.target_path.join(&node.name);
-                    let _ = reveal_in_file_manager(&path);
+                if let Some(id) = this.state.hit_test(px_x, px_y) {
+                    this.open_context_menu(id, px_x, px_y, cx);
                 }
             }),
         )
         .when_some(active_node, |pane, node| {
             let ext_color = theme::extension_color(&node.extension);
+            let node_id = node.id;
             pane.child(
                 div()
                     .absolute()
@@ -103,17 +98,62 @@ pub fn render_cushion_treemap(app: &DscanApp, cx: &Context<DscanApp>) -> impl In
                             .child(div().text_size(px(10.0)).text_color(theme::TEXT_DIM).child(
                                 if node.is_dir {
                                     format!(
-                                        "Directory (Depth {}, {} items) — Right-click to open",
+                                        "Directory (Depth {}, {} items) — Right-click for options",
                                         node.rel_depth,
                                         node.children_ids.len()
                                     )
                                 } else {
                                     format!(
-                                        "{} file (Depth {}) — Right-click to open in file manager",
+                                        "{} file (Depth {}) — Right-click for options",
                                         node.extension, node.rel_depth
                                     )
                                 },
                             )),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                div()
+                                    .id("treemap-tooltip-reveal")
+                                    .px_2()
+                                    .py(px(2.0))
+                                    .rounded_sm()
+                                    .bg(theme::SURFACE_HOVER)
+                                    .hover(|h| h.bg(theme::BORDER_LIGHT))
+                                    .cursor_pointer()
+                                    .text_size(px(10.0))
+                                    .text_color(theme::TEXT_PRIMARY)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _window, cx| {
+                                            this.reveal_node(node_id, cx);
+                                        }),
+                                    )
+                                    .child("📂 Reveal"),
+                            )
+                            .child(
+                                div()
+                                    .id("treemap-tooltip-trash")
+                                    .px_2()
+                                    .py(px(2.0))
+                                    .rounded_sm()
+                                    .bg(theme::SURFACE_HOVER)
+                                    .hover(|h| h.bg(theme::ACCENT_RED))
+                                    .cursor_pointer()
+                                    .text_size(px(10.0))
+                                    .text_color(theme::ACCENT_RED)
+                                    .hover(|h| h.text_color(theme::TEXT_PRIMARY))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _window, cx| {
+                                            this.request_trash_node(node_id, cx);
+                                        }),
+                                    )
+                                    .child("🗑 Trash"),
+                            ),
                     ),
             )
         })
