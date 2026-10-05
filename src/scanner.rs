@@ -34,6 +34,13 @@ enum BufferSource {
         ptr: *mut u8,
         size: usize,
     },
+    #[cfg(windows)]
+    VirtualAlloc {
+        ptr: *mut u8,
+        #[allow(dead_code)]
+        size: usize,
+        is_large_page: bool,
+    },
     HeapLayout(std::alloc::Layout),
 }
 
@@ -103,6 +110,57 @@ impl AlignedBuffer {
             }
         }
 
+        #[cfg(windows)]
+        {
+            use crate::sys::windows::*;
+            // Attempt 2 MiB Large Page allocation if size is suitable
+            let large_page_min = unsafe { GetLargePageMinimum() };
+            if large_page_min > 0 && size >= large_page_min && size.is_multiple_of(large_page_min) {
+                // SAFETY: VirtualAlloc with MEM_COMMIT | MEM_RESERVE | MEM_LARGE_PAGES.
+                let ptr = unsafe {
+                    VirtualAlloc(
+                        std::ptr::null_mut(),
+                        size,
+                        MEM_COMMIT | MEM_RESERVE | MEM_LARGE_PAGES,
+                        PAGE_READWRITE,
+                    )
+                };
+                if !ptr.is_null() {
+                    return AlignedBuffer {
+                        ptr: ptr as *mut u8,
+                        source: BufferSource::VirtualAlloc {
+                            ptr: ptr as *mut u8,
+                            size,
+                            is_large_page: true,
+                        },
+                        len: size,
+                    };
+                }
+            }
+
+            // Standard VirtualAlloc (page-aligned, avoids CRT heap contention)
+            // SAFETY: VirtualAlloc with MEM_COMMIT | MEM_RESERVE.
+            let ptr = unsafe {
+                VirtualAlloc(
+                    std::ptr::null_mut(),
+                    size,
+                    MEM_COMMIT | MEM_RESERVE,
+                    PAGE_READWRITE,
+                )
+            };
+            if !ptr.is_null() {
+                return AlignedBuffer {
+                    ptr: ptr as *mut u8,
+                    source: BufferSource::VirtualAlloc {
+                        ptr: ptr as *mut u8,
+                        size,
+                        is_large_page: false,
+                    },
+                    len: size,
+                };
+            }
+        }
+
         // Standard heap allocation fallback
         let layout = std::alloc::Layout::from_size_align(size, align).expect("valid layout");
         // SAFETY: layout has non-zero size and valid power-of-two alignment.
@@ -137,6 +195,17 @@ impl AlignedBuffer {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+
+    #[cfg(windows)]
+    pub fn is_large_page(&self) -> bool {
+        matches!(
+            self.source,
+            BufferSource::VirtualAlloc {
+                is_large_page: true,
+                ..
+            }
+        )
+    }
 }
 
 impl Drop for AlignedBuffer {
@@ -147,6 +216,17 @@ impl Drop for AlignedBuffer {
                 // SAFETY: ptr was allocated by mmap and size matches.
                 unsafe {
                     crate::sys::munmap(ptr as *mut std::ffi::c_void, size);
+                }
+            }
+            #[cfg(windows)]
+            BufferSource::VirtualAlloc { ptr, .. } => {
+                // SAFETY: ptr was allocated by VirtualAlloc with MEM_COMMIT | MEM_RESERVE.
+                unsafe {
+                    crate::sys::VirtualFree(
+                        ptr as *mut std::ffi::c_void,
+                        0,
+                        crate::sys::MEM_RELEASE,
+                    );
                 }
             }
             BufferSource::HeapLayout(layout) => {
