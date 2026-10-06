@@ -17,8 +17,8 @@ pub fn render_status_bar(app: &DscanApp, _cx: &Context<DscanApp>) -> impl IntoEl
         .id("status-bar")
         .h_flex()
         .w_full()
-        .h(px(30.0))
-        .px_4()
+        .h(px(38.0))
+        .px(px(20.0))
         .bg(t.surface)
         .border_t_1()
         .border_color(t.border)
@@ -48,8 +48,8 @@ pub fn render_status_bar(app: &DscanApp, _cx: &Context<DscanApp>) -> impl IntoEl
 
                     s.child(
                         div()
-                            .w(px(8.0))
-                            .h(px(8.0))
+                            .w(px(9.0))
+                            .h(px(9.0))
                             .rounded_full()
                             .bg(t.accent_amber),
                     )
@@ -75,8 +75,8 @@ pub fn render_status_bar(app: &DscanApp, _cx: &Context<DscanApp>) -> impl IntoEl
 
                     s.child(
                         div()
-                            .w(px(8.0))
-                            .h(px(8.0))
+                            .w(px(9.0))
+                            .h(px(9.0))
                             .rounded_full()
                             .bg(t.accent_green),
                     )
@@ -92,7 +92,7 @@ pub fn render_status_bar(app: &DscanApp, _cx: &Context<DscanApp>) -> impl IntoEl
                     )))
                 })
                 .when(!is_scanning && !is_complete, |s| {
-                    s.child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(t.text_dim))
+                    s.child(div().w(px(9.0)).h(px(9.0)).rounded_full().bg(t.text_dim))
                         .child(div().text_color(t.text_muted).child("Ready to scan"))
                 }),
         )
@@ -116,21 +116,21 @@ pub fn render_status_bar(app: &DscanApp, _cx: &Context<DscanApp>) -> impl IntoEl
                             )))
                             .child(
                                 div()
-                                    .w(px(40.0))
-                                    .h(px(5.0))
-                                    .rounded_sm()
+                                    .w(px(60.0))
+                                    .h(px(6.0))
+                                    .rounded_md()
                                     .bg(t.border_light)
                                     .child(
                                         div()
                                             .h_full()
-                                            .rounded_sm()
+                                            .rounded_md()
                                             .bg(if used_pct > 90.0 {
                                                 t.accent_red
                                             } else {
                                                 t.accent_blue
                                             })
                                             .w(px(
-                                                (40.0 * (used_pct / 100.0) as f32).clamp(1.0, 40.0)
+                                                (60.0 * (used_pct / 100.0) as f32).clamp(1.0, 60.0)
                                             )),
                                     ),
                             ),
@@ -138,11 +138,11 @@ pub fn render_status_bar(app: &DscanApp, _cx: &Context<DscanApp>) -> impl IntoEl
                 })
                 .child(
                     div()
-                        .px_2()
-                        .py(px(1.0))
-                        .rounded_sm()
+                        .px(px(8.0))
+                        .py(px(2.0))
+                        .rounded_md()
                         .bg(t.surface_hover)
-                        .text_color(t.text_muted)
+                        .text_color(t.text_dim)
                         .font_weight(FontWeight::MEDIUM)
                         .text_size(px(11.0))
                         .child(format!("Workers: {}", app.threads)),

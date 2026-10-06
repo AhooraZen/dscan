@@ -60,8 +60,8 @@ impl CushionSurface {
         let dot = (nx * lx + ny * ly + nz * lz) / (n_len * l_len);
         let cos_theta = dot.max(0.0);
 
-        let ambient = 0.35;
-        let diffuse = 0.65;
+        let ambient = 0.20;
+        let diffuse = 0.80;
         (ambient + diffuse * cos_theta).clamp(0.0, 1.0)
     }
 

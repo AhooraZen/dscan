@@ -17,8 +17,8 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
         .id("title-bar")
         .h_flex()
         .w_full()
-        .h(px(48.0))
-        .px_4()
+        .h(px(56.0))
+        .px(px(20.0))
         .bg(t.surface)
         .border_b_1()
         .border_color(t.border)
@@ -29,7 +29,7 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
             div()
                 .h_flex()
                 .items_center()
-                .gap_4()
+                .gap(px(16.0))
                 .child(
                     div()
                         .h_flex()
@@ -39,18 +39,18 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                             div()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(t.accent_green)
-                                .text_size(px(16.0))
+                                .text_size(px(18.0))
                                 .child("⚡ dscan"),
                         )
                         .child(
                             div()
                                 .text_size(px(10.0))
                                 .font_weight(FontWeight::MEDIUM)
-                                .px(px(6.0))
-                                .py(px(1.0))
-                                .rounded_sm()
+                                .px(px(8.0))
+                                .py(px(2.0))
+                                .rounded_md()
                                 .bg(t.surface_hover)
-                                .text_color(t.text_muted)
+                                .text_color(t.text_dim)
                                 .child(concat!("v", env!("CARGO_PKG_VERSION"))),
                         ),
                 )
@@ -58,11 +58,11 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                     div()
                         .h_flex()
                         .items_center()
-                        .gap_1()
+                        .gap(px(6.0))
                         .child(
                             div()
                                 .text_size(px(12.0))
-                                .text_color(t.text_muted)
+                                .text_color(t.text_dim)
                                 .child("Target:"),
                         )
                         .child(
@@ -76,7 +76,7 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
         )
         .child(
             // Center drive chips
-            div().h_flex().items_center().gap_2().children(
+            div().h_flex().items_center().gap(px(6.0)).children(
                 app.state.drives.iter().enumerate().map(|(idx, drive)| {
                     let is_selected = idx == app.state.selected_drive_idx;
                     let mount_str = drive.mount_point.to_string_lossy().to_string();
@@ -85,9 +85,9 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
 
                     div()
                         .id(("drive-chip", idx))
-                        .px_3()
-                        .py(px(4.0))
-                        .rounded_md()
+                        .px(px(12.0))
+                        .py(px(6.0))
+                        .rounded_lg()
                         .text_size(px(12.0))
                         .font_weight(if is_selected {
                             FontWeight::SEMIBOLD
@@ -96,7 +96,12 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                         })
                         .cursor_pointer()
                         .when(is_selected, |s| {
-                            s.bg(t.border_light).text_color(t.text_primary)
+                            s.bg(t.accent_blue).text_color(gpui::Rgba {
+                                r: 1.0,
+                                g: 1.0,
+                                b: 1.0,
+                                a: 1.0,
+                            })
                         })
                         .when(!is_selected, |s| {
                             s.bg(t.surface_hover).text_color(t.text_muted)
@@ -117,7 +122,7 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
             div()
                 .h_flex()
                 .items_center()
-                .gap_3()
+                .gap(px(8.0))
                 .child(
                     // Theme Switcher Button
                     div()
@@ -125,9 +130,9 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                         .h_flex()
                         .items_center()
                         .gap_1()
-                        .px_3()
-                        .py(px(5.0))
-                        .rounded_md()
+                        .px(px(12.0))
+                        .py(px(7.0))
+                        .rounded_lg()
                         .bg(t.surface_hover)
                         .hover(move |h| h.bg(t.border_light))
                         .cursor_pointer()
@@ -146,9 +151,9 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                     s.child(
                         div()
                             .id("btn-scan")
-                            .px_4()
-                            .py(px(5.0))
-                            .rounded_md()
+                            .px(px(16.0))
+                            .py(px(7.0))
+                            .rounded_lg()
                             .bg(t.accent_green)
                             .text_color(if is_dark {
                                 t.bg
@@ -178,9 +183,9 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                     s.child(
                         div()
                             .id("btn-pause")
-                            .px_4()
-                            .py(px(5.0))
-                            .rounded_md()
+                            .px(px(16.0))
+                            .py(px(7.0))
+                            .rounded_lg()
                             .bg(t.accent_amber)
                             .text_color(if is_dark {
                                 t.bg
@@ -211,9 +216,9 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                     .child(
                         div()
                             .id("btn-cancel")
-                            .px_4()
-                            .py(px(5.0))
-                            .rounded_md()
+                            .px(px(16.0))
+                            .py(px(7.0))
+                            .rounded_lg()
                             .bg(t.accent_red)
                             .text_color(gpui::Rgba {
                                 r: 1.0,

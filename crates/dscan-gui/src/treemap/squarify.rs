@@ -264,9 +264,9 @@ pub fn build_hierarchical_layout(
             })
             .collect();
 
-        // 1.0 px inset for directory nesting clarity
+        // 2px inset for directory nesting clarity
         let layout_box = if node.rel_depth > 0 {
-            parent_rect.inset(1.0)
+            parent_rect.inset(2.0)
         } else {
             parent_rect
         };
@@ -282,8 +282,8 @@ pub fn build_hierarchical_layout(
 
             let mut child_cushion = parent_cushion;
             let depth = child_node.rel_depth;
-            let decay = 0.65f32.powi(depth as i32);
-            let h = (0.5 * decay).max(0.01);
+            let decay = 0.55f32.powi(depth as i32);
+            let h = (0.6 * decay).max(0.02);
 
             child_cushion.add_ridge(
                 child_rect.x,

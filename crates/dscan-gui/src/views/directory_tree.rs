@@ -26,14 +26,14 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
             div()
                 .h_flex()
                 .w_full()
-                .h(px(32.0))
-                .px_3()
+                .h(px(36.0))
+                .px(px(12.0))
                 .bg(t.surface)
                 .border_b_1()
                 .border_color(t.border)
-                .text_size(px(12.0))
+                .text_size(px(11.0))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(t.text_muted)
+                .text_color(t.text_dim)
                 .justify_between()
                 .items_center()
                 .child(div().w(px(240.0)).child("Name"))
@@ -49,8 +49,8 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                 .v_flex()
                 .flex_1()
                 .overflow_y_scroll()
-                .px_2()
-                .py_1()
+                .px(px(8.0))
+                .py(px(4.0))
                 .when(is_scanning, |s| {
                     // WinDirStat Pacman scanning indicator
                     let pacman_art = match app.pacman_phase % 4 {
@@ -67,9 +67,9 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                     s.child(
                         div()
                             .v_flex()
-                            .p_4()
-                            .gap_2()
-                            .rounded_md()
+                            .p(px(16.0))
+                            .gap(px(8.0))
+                            .rounded_lg()
                             .bg(t.surface)
                             .border_1()
                             .border_color(t.border)
@@ -80,26 +80,26 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                     .items_center()
                                     .child(
                                         div()
-                                            .text_size(px(20.0))
+                                            .text_size(px(22.0))
                                             .text_color(t.accent_amber)
                                             .font_weight(FontWeight::BOLD)
                                             .child(pacman_art),
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(14.0))
+                                            .text_size(px(15.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(t.text_primary)
                                             .child("Scanning directories..."),
                                     ),
                             )
-                            .child(div().text_size(px(12.0)).text_color(t.text_muted).child(
+                            .child(div().text_size(px(13.0)).text_color(t.text_muted).child(
                                 format!(
                                     "Scanned: {scanned_files} files ({})",
                                     format_bytes(scanned_bytes)
                                 ),
                             ))
-                            .child(div().text_size(px(11.0)).text_color(t.text_dim).child(
+                            .child(div().text_size(px(12.0)).text_color(t.text_dim).child(
                                 if current_path.is_empty() {
                                     "Traversing...".to_string()
                                 } else {
@@ -116,9 +116,9 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                 .v_flex()
                                 .items_center()
                                 .justify_center()
-                                .p_8()
-                                .text_color(t.text_muted)
-                                .text_size(px(13.0))
+                                .p(px(32.0))
+                                .text_color(t.text_dim)
+                                .text_size(px(14.0))
                                 .child("Select a drive and click 'Scan' to start"),
                         )
                     },
@@ -137,16 +137,16 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                         let node = &app.state.raw_nodes[node_id as usize];
                         let is_selected = app.state.selected_node_id == Some(node_id);
                         let is_expanded = app.state.expanded_dirs.contains(&node_id);
-                        let indent = (node.rel_depth as f32) * 14.0;
+                        let indent = (node.rel_depth as f32) * 18.0;
                         let pct = (node.total_bytes as f64 / total_bytes as f64) * 100.0;
 
                         div()
                             .id(("tree-row", node_id))
                             .h_flex()
                             .w_full()
-                            .h(px(26.0))
-                            .px_2()
-                            .rounded_sm()
+                            .h(px(32.0))
+                            .px(px(8.0))
+                            .rounded_md()
                             .cursor_pointer()
                             .text_size(px(12.0))
                             .when(is_selected, |s| s.bg(t.surface_hover))
@@ -232,17 +232,17 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                     .gap_1()
                                     .child(
                                         div()
-                                            .w(px(24.0))
-                                            .h(px(4.0))
-                                            .rounded_sm()
+                                            .w(px(32.0))
+                                            .h(px(5.0))
+                                            .rounded_md()
                                             .bg(t.border_light)
                                             .child(
                                                 div()
                                                     .h_full()
-                                                    .rounded_sm()
+                                                    .rounded_md()
                                                     .bg(t.accent_blue)
-                                                    .w(px((24.0 * (pct / 100.0) as f32)
-                                                        .clamp(1.0, 24.0))),
+                                                    .w(px((32.0 * (pct / 100.0) as f32)
+                                                        .clamp(1.0, 32.0))),
                                             ),
                                     )
                                     .child(

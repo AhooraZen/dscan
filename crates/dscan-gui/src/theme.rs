@@ -57,54 +57,54 @@ pub struct ThemeColors {
 impl ThemeColors {
     pub const fn dark() -> Self {
         Self {
-            bg: const_rgb(0x0F172A),             // Slate 900
-            surface: const_rgb(0x1E293B),        // Slate 800
-            surface_hover: const_rgb(0x334155),  // Slate 700
-            surface_active: const_rgb(0x475569), // Slate 600
-            border: const_rgb(0x334155),         // Slate 700
-            border_light: const_rgb(0x475569),   // Slate 600
-            text_primary: const_rgb(0xF8FAFC),   // Slate 50
-            text_muted: const_rgb(0x94A3B8),     // Slate 400
-            text_dim: const_rgb(0x64748B),       // Slate 500
-            accent_blue: const_rgb(0x38BDF8),    // Sky 400
-            accent_green: const_rgb(0x34D399),   // Emerald 400
-            accent_amber: const_rgb(0xFBBF24),   // Amber 400
-            accent_red: const_rgb(0xEF4444),     // Red 500
+            bg: const_rgb(0x0B1120),             // Deep navy (richer than Slate 900)
+            surface: const_rgb(0x151D2E),        // Elevated surface
+            surface_hover: const_rgb(0x1E2A3F),  // Hover lift
+            surface_active: const_rgb(0x2A3A52), // Active press
+            border: const_rgb(0x1F2C40),         // Subtle border
+            border_light: const_rgb(0x2E4058),   // Prominent border
+            text_primary: const_rgb(0xF0F4F8),   // Bright white
+            text_muted: const_rgb(0x8899AE),     // Medium contrast
+            text_dim: const_rgb(0x5A6B7E),       // Low contrast
+            accent_blue: const_rgb(0x3BAAFF),    // Vivid blue
+            accent_green: const_rgb(0x22D89E),   // Neon green
+            accent_amber: const_rgb(0xFFBE2E),   // Warm amber
+            accent_red: const_rgb(0xF04444),     // Bright red
         }
     }
 
     pub const fn light() -> Self {
         Self {
-            bg: const_rgb(0xF8FAFC),             // Slate 50
+            bg: const_rgb(0xF4F6FA),             // Cool white
             surface: const_rgb(0xFFFFFF),        // White
-            surface_hover: const_rgb(0xF1F5F9),  // Slate 100
-            surface_active: const_rgb(0xE2E8F0), // Slate 200
-            border: const_rgb(0xE2E8F0),         // Slate 200
-            border_light: const_rgb(0xCBD5E1),   // Slate 300
-            text_primary: const_rgb(0x0F172A),   // Slate 900
-            text_muted: const_rgb(0x475569),     // Slate 600
-            text_dim: const_rgb(0x64748B),       // Slate 500
-            accent_blue: const_rgb(0x0284C7),    // Sky 600
-            accent_green: const_rgb(0x059669),   // Emerald 600
-            accent_amber: const_rgb(0xD97706),   // Amber 600
-            accent_red: const_rgb(0xDC2626),     // Red 600
+            surface_hover: const_rgb(0xEDF0F7),  // Subtle blue-gray
+            surface_active: const_rgb(0xDDE3ED), // Active press
+            border: const_rgb(0xDDE3ED),         // Soft border
+            border_light: const_rgb(0xC5CEDB),   // Visible border
+            text_primary: const_rgb(0x111827),   // Near black
+            text_muted: const_rgb(0x4B5563),     // Gray 600
+            text_dim: const_rgb(0x6B7280),       // Gray 500
+            accent_blue: const_rgb(0x0070E0),    // Vivid blue
+            accent_green: const_rgb(0x05875A),   // Rich green
+            accent_amber: const_rgb(0xCC6D00),   // Deep amber
+            accent_red: const_rgb(0xD42020),     // Strong red
         }
     }
 }
 
 // Default constants for backward compatibility
-pub const BG_DARK: Rgba = const_rgb(0x0F172A);
-pub const SURFACE_DARK: Rgba = const_rgb(0x1E293B);
-pub const SURFACE_HOVER: Rgba = const_rgb(0x334155);
-pub const BORDER_DARK: Rgba = const_rgb(0x334155);
-pub const BORDER_LIGHT: Rgba = const_rgb(0x475569);
-pub const TEXT_PRIMARY: Rgba = const_rgb(0xF8FAFC);
-pub const TEXT_MUTED: Rgba = const_rgb(0x94A3B8);
-pub const TEXT_DIM: Rgba = const_rgb(0x64748B);
-pub const ACCENT_BLUE: Rgba = const_rgb(0x38BDF8);
-pub const ACCENT_GREEN: Rgba = const_rgb(0x34D399);
-pub const ACCENT_AMBER: Rgba = const_rgb(0xFBBF24);
-pub const ACCENT_RED: Rgba = const_rgb(0xEF4444);
+pub const BG_DARK: Rgba = const_rgb(0x0B1120);
+pub const SURFACE_DARK: Rgba = const_rgb(0x151D2E);
+pub const SURFACE_HOVER: Rgba = const_rgb(0x1E2A3F);
+pub const BORDER_DARK: Rgba = const_rgb(0x1F2C40);
+pub const BORDER_LIGHT: Rgba = const_rgb(0x2E4058);
+pub const TEXT_PRIMARY: Rgba = const_rgb(0xF0F4F8);
+pub const TEXT_MUTED: Rgba = const_rgb(0x8899AE);
+pub const TEXT_DIM: Rgba = const_rgb(0x5A6B7E);
+pub const ACCENT_BLUE: Rgba = const_rgb(0x3BAAFF);
+pub const ACCENT_GREEN: Rgba = const_rgb(0x22D89E);
+pub const ACCENT_AMBER: Rgba = const_rgb(0xFFBE2E);
+pub const ACCENT_RED: Rgba = const_rgb(0xF04444);
 
 // 16 distinct perceptual OKLCH-derived colors for file extensions
 pub const EXTENSION_PALETTE: [Rgba; 16] = [

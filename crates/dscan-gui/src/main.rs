@@ -28,7 +28,7 @@ fn main() {
         let window_options = WindowOptions {
             window_bounds: Some(bounds),
             titlebar: Some(gpui::TitlebarOptions {
-                title: Some("dscan — Disk Space Visualizer".into()),
+                title: Some("dscan".into()),
                 appears_transparent: false,
                 traffic_light_position: None,
             }),

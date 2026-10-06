@@ -133,13 +133,18 @@ impl Element for CushionTreemapElement {
             }
 
             let r = node.rect;
-            if r.w < 0.5 || r.h < 0.5 {
+            if r.w < 0.3 || r.h < 0.3 {
                 continue;
             }
 
+            // 1px gap between nodes for visual separation
+            let gap = if r.w > 4.0 && r.h > 4.0 { 0.5 } else { 0.0 };
             let quad_bounds = Bounds {
-                origin: point(origin_x + px(r.x), origin_y + px(r.y)),
-                size: size(px(r.w), px(r.h)),
+                origin: point(origin_x + px(r.x + gap), origin_y + px(r.y + gap)),
+                size: size(
+                    px((r.w - gap * 2.0).max(0.3)),
+                    px((r.h - gap * 2.0).max(0.3)),
+                ),
             };
 
             let base_color = theme::extension_color(&node.extension);
@@ -150,15 +155,30 @@ impl Element for CushionTreemapElement {
             if let Some(ref filter) = self.filter_ext
                 && !node.extension.eq_ignore_ascii_case(filter)
             {
-                shaded_color.r *= 0.2;
-                shaded_color.g *= 0.2;
-                shaded_color.b *= 0.2;
+                shaded_color.r *= 0.3;
+                shaded_color.g *= 0.3;
+                shaded_color.b *= 0.3;
             }
 
             window.paint_quad(fill(quad_bounds, shaded_color));
 
             if self.selected_id == Some(node.id) {
+                // 2px selection outline
                 window.paint_quad(outline(quad_bounds, self.select_color, BorderStyle::Solid));
+                window.paint_quad(outline(
+                    Bounds {
+                        origin: point(
+                            quad_bounds.origin.x + px(1.0),
+                            quad_bounds.origin.y + px(1.0),
+                        ),
+                        size: size(
+                            quad_bounds.size.width - px(2.0),
+                            quad_bounds.size.height - px(2.0),
+                        ),
+                    },
+                    self.select_color,
+                    BorderStyle::Solid,
+                ));
             } else if self.hovered_id == Some(node.id) {
                 window.paint_quad(outline(quad_bounds, self.hover_color, BorderStyle::Solid));
             }

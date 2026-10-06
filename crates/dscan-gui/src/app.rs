@@ -235,10 +235,10 @@ impl Render for DscanApp {
         let size = window.viewport_size();
         let avail_w: f32 = size.width.into();
         let total_h: f32 = size.height.into();
-        let avail_h = (total_h - 48.0 - 30.0).max(100.0);
+        let avail_h = (total_h - 56.0 - 38.0).max(100.0);
 
-        // Treemap gets bottom half of available vertical space
-        self.state.update_layout_size(avail_w, avail_h * 0.5);
+        // Treemap gets 55% of available vertical space
+        self.state.update_layout_size(avail_w, avail_h * 0.55);
 
         let mut root = div()
             .id("dscan-app-root")
@@ -291,8 +291,8 @@ impl Render for DscanApp {
         // Render context menu popup if active
         if let Some(ref menu) = self.context_menu {
             let node_id = menu.node_id;
-            let menu_w = 210.0;
-            let menu_h = 75.0;
+            let menu_w = 220.0;
+            let menu_h = 84.0;
             let x = menu.pos_x.min(avail_w - menu_w).max(8.0);
             let y = menu.pos_y.min(total_h - menu_h).max(8.0);
 
@@ -303,8 +303,8 @@ impl Render for DscanApp {
                     .left(px(x))
                     .top(px(y))
                     .w(px(menu_w))
-                    .py(px(4.0))
-                    .rounded_md()
+                    .py(px(6.0))
+                    .rounded_lg()
                     .bg(t.surface)
                     .border_1()
                     .border_color(t.border_light)
@@ -314,11 +314,12 @@ impl Render for DscanApp {
                             .h_flex()
                             .items_center()
                             .gap_2()
-                            .px_3()
-                            .py(px(6.0))
+                            .px(px(12.0))
+                            .py(px(8.0))
                             .cursor_pointer()
+                            .rounded_md()
                             .hover(move |h| h.bg(t.surface_hover))
-                            .text_size(px(12.0))
+                            .text_size(px(13.0))
                             .text_color(t.text_primary)
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -334,11 +335,12 @@ impl Render for DscanApp {
                             .h_flex()
                             .items_center()
                             .gap_2()
-                            .px_3()
-                            .py(px(6.0))
+                            .px(px(12.0))
+                            .py(px(8.0))
                             .cursor_pointer()
+                            .rounded_md()
                             .hover(move |h| h.bg(t.surface_hover))
-                            .text_size(px(12.0))
+                            .text_size(px(13.0))
                             .text_color(t.accent_red)
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -376,10 +378,10 @@ impl Render for DscanApp {
                         div()
                             .id("trash-confirm-modal")
                             .v_flex()
-                            .w(px(460.0))
-                            .p_6()
-                            .gap_4()
-                            .rounded_lg()
+                            .w(px(480.0))
+                            .p(px(24.0))
+                            .gap(px(16.0))
+                            .rounded_xl()
                             .bg(t.surface)
                             .border_1()
                             .border_color(t.border_light)
@@ -388,7 +390,7 @@ impl Render for DscanApp {
                                     .h_flex()
                                     .items_center()
                                     .gap_2()
-                                    .text_size(px(16.0))
+                                    .text_size(px(17.0))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(t.text_primary)
                                     .child(div().text_color(t.accent_red).child("🗑"))
@@ -397,8 +399,8 @@ impl Render for DscanApp {
                             .child(
                                 div()
                                     .v_flex()
-                                    .gap_2()
-                                    .text_size(px(12.0))
+                                    .gap(px(8.0))
+                                    .text_size(px(13.0))
                                     .text_color(t.text_muted)
                                     .child(
                                         div()
@@ -455,8 +457,8 @@ impl Render for DscanApp {
                             .when_some(err_opt, move |d, err| {
                                 d.child(
                                     div()
-                                        .p_2()
-                                        .rounded_sm()
+                                        .p(px(10.0))
+                                        .rounded_lg()
                                         .bg(gpui::Rgba {
                                             r: 0.9,
                                             g: 0.2,
@@ -466,7 +468,7 @@ impl Render for DscanApp {
                                         .border_1()
                                         .border_color(t.accent_red)
                                         .text_color(t.accent_red)
-                                        .text_size(px(11.0))
+                                        .text_size(px(12.0))
                                         .child(format!("Error: {err}")),
                                 )
                             })
@@ -474,18 +476,18 @@ impl Render for DscanApp {
                                 div()
                                     .h_flex()
                                     .justify_end()
-                                    .gap_3()
+                                    .gap(px(10.0))
                                     .mt_2()
                                     .child(
                                         div()
                                             .id("cancel-trash-btn")
-                                            .px_4()
-                                            .py(px(6.0))
-                                            .rounded_md()
+                                            .px(px(16.0))
+                                            .py(px(8.0))
+                                            .rounded_lg()
                                             .bg(t.surface_hover)
                                             .hover(move |h| h.bg(t.border_light))
                                             .cursor_pointer()
-                                            .text_size(px(12.0))
+                                            .text_size(px(13.0))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(t.text_primary)
                                             .on_mouse_down(
@@ -499,13 +501,13 @@ impl Render for DscanApp {
                                     .child(
                                         div()
                                             .id("confirm-trash-btn")
-                                            .px_4()
-                                            .py(px(6.0))
-                                            .rounded_md()
+                                            .px(px(16.0))
+                                            .py(px(8.0))
+                                            .rounded_lg()
                                             .bg(t.accent_red)
                                             .hover(|h| h.opacity(0.85))
                                             .cursor_pointer()
-                                            .text_size(px(12.0))
+                                            .text_size(px(13.0))
                                             .font_weight(FontWeight::BOLD)
                                             .text_color(gpui::Rgba {
                                                 r: 1.0,
