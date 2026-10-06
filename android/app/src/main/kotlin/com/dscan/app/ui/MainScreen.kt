@@ -1,15 +1,21 @@
 package com.dscan.app.ui
 
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import com.dscan.app.ExtensionStat
 import com.dscan.app.ScanProgress
@@ -26,12 +32,13 @@ fun MainScreen(
     extensionStats: List<ExtensionStat>,
     onStartScan: () -> Unit,
     onCancelScan: () -> Unit,
-    darkTheme: Boolean,
-    onToggleDarkTheme: () -> Unit,
+    onBrowseFolder: () -> Unit,
+    onNavigateSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var selectedNode by remember { mutableStateOf<TreemapNode?>(null) }
+    val view = LocalView.current
 
     Scaffold(
         topBar = {
@@ -52,17 +59,54 @@ fun MainScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onToggleDarkTheme) {
-                        Icon(
-                            imageVector = if (darkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
-                            contentDescription = "Toggle Theme"
-                        )
+                    IconButton(onClick = onNavigateSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             )
+        },
+        bottomBar = {
+            NavigationBar {
+                val items = listOf(
+                    Triple("Treemap", Icons.Default.GridView, 0),
+                    Triple("Directory", Icons.Default.FolderOpen, 1),
+                    Triple("File Types", Icons.Default.PieChart, 2)
+                )
+                items.forEach { (label, icon, index) ->
+                    NavigationBarItem(
+                        selected = selectedTab == index,
+                        onClick = { selectedTab = index },
+                        icon = { Icon(icon, contentDescription = label) },
+                        label = { Text(label) }
+                    )
+                }
+            }
+        },
+        floatingActionButton = {
+            if (isScanning) {
+                ExtendedFloatingActionButton(
+                    onClick = onCancelScan,
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Cancel")
+                }
+            } else {
+                ExtendedFloatingActionButton(
+                    onClick = onStartScan,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Scan")
+                }
+            }
         }
     ) { innerPadding ->
         Column(
@@ -71,57 +115,55 @@ fun MainScreen(
                 .padding(innerPadding)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            // Storage quick selector
-            StoragePicker(
-                selectedPath = currentPath,
-                onPathSelected = onPathChange,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-
-            // Path & Scan Bar
+            // Storage quick selector + Browse button
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedTextField(
-                    value = currentPath,
-                    onValueChange = onPathChange,
-                    modifier = Modifier.weight(1f),
-                    label = { Text("Scan Target") },
-                    singleLine = true,
-                    enabled = !isScanning
+                StoragePicker(
+                    selectedPath = currentPath,
+                    onPathSelected = onPathChange,
+                    modifier = Modifier.weight(1f)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                if (isScanning) {
-                    Button(
-                        onClick = onCancelScan,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Text("Cancel")
-                    }
-                } else {
-                    Button(
-                        onClick = onStartScan,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Text("Scan")
-                    }
+                FilledTonalButton(onClick = onBrowseFolder) {
+                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Browse")
                 }
             }
 
-            // Live progress stats banner
-            if (isScanning || progress.totalFiles > 0) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
+            // Scanning gauge or progress stats
+            AnimatedContent(
+                targetState = isScanning,
+                transitionSpec = {
+                    fadeIn() + slideInVertically() togetherWith fadeOut() + slideOutVertically()
+                },
+                label = "scan_state"
+            ) { scanning ->
+                if (scanning) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        ScanGauge(progress = progress, modifier = Modifier.padding(8.dp))
+                    }
+                } else if (progress.totalFiles > 0) {
+                    // Compact stats after scan
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
@@ -130,60 +172,13 @@ fun MainScreen(
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                "${progress.totalFiles} files",
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                "${String.format("%.1f", progress.filesPerSec)} files/s • ${formatBytes(progress.bytesPerSec.toLong())}/s",
+                                "${progress.totalFiles} files  •  ${progress.elapsedMillis}ms",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                "Workers: ${progress.activeWorkers} • ${progress.elapsedMillis}ms",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        if (isScanning) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            LinearProgressIndicator(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(3.dp)
-                                    .clip(RoundedCornerShape(2.dp))
                             )
                         }
                     }
                 }
-            }
-
-            // Navigation Tabs
-            TabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.primary
-            ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text("Treemap") }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("Directory Tree") }
-                )
-                Tab(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    text = { Text("File Types") }
-                )
             }
 
             // Content Area
@@ -192,60 +187,111 @@ fun MainScreen(
                     .fillMaxWidth()
                     .weight(1f)
             ) {
-                when (selectedTab) {
-                    0 -> {
-                        if (treemapNodes.isEmpty()) {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    if (isScanning) "Building treemap..." else "Tap 'Scan' to visualize disk space",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        } else {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                if (selectedNode != null) {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.surfaceVariant,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
+                AnimatedContent(
+                    targetState = selectedTab,
+                    transitionSpec = {
+                        fadeIn() + slideInHorizontally { if (targetState > initialState) it / 4 else -it / 4 } togetherWith
+                                fadeOut() + slideOutHorizontally { if (targetState > initialState) -it / 4 else it / 4 }
+                    },
+                    label = "tab"
+                ) { tab ->
+                    when (tab) {
+                        0 -> {
+                            if (treemapNodes.isEmpty()) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        if (isScanning) "Building treemap..." else "Tap Scan to visualize disk space",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            } else {
+                                Column(modifier = Modifier.fillMaxSize()) {
+                                    if (selectedNode != null) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                            modifier = Modifier.fillMaxWidth()
                                         ) {
-                                            Text(
-                                                "${selectedNode?.name} (${formatBytes(selectedNode?.totalBytes ?: 0)})",
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            IconButton(onClick = { selectedNode = null }) {
-                                                Icon(Icons.Default.Close, contentDescription = "Deselect")
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    "${selectedNode?.name} (${formatBytes(selectedNode?.totalBytes ?: 0)})",
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                                IconButton(onClick = { selectedNode = null }) {
+                                                    Icon(Icons.Default.Close, contentDescription = "Deselect")
+                                                }
                                             }
                                         }
                                     }
+                                    TreemapCanvas(
+                                        nodes = treemapNodes,
+                                        selectedNode = selectedNode,
+                                        onNodeSelected = {
+                                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                            selectedNode = it
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    // Color legend
+                                    ColorLegend(
+                                        extensionStats = extensionStats,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
                                 }
-                                TreemapCanvas(
-                                    nodes = treemapNodes,
-                                    selectedNode = selectedNode,
-                                    onNodeSelected = { selectedNode = it },
-                                    modifier = Modifier.weight(1f)
-                                )
                             }
                         }
-                    }
-                    1 -> {
-                        DirectoryList(
-                            nodes = treemapNodes,
-                            selectedNode = selectedNode,
-                            onNodeClick = { selectedNode = it }
-                        )
-                    }
-                    2 -> {
-                        ExtensionBreakdownList(stats = extensionStats)
+                        1 -> {
+                            DirectoryList(
+                                nodes = treemapNodes,
+                                selectedNode = selectedNode,
+                                onNodeClick = {
+                                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                    selectedNode = it
+                                }
+                            )
+                        }
+                        2 -> {
+                            ExtensionBreakdownList(stats = extensionStats)
+                        }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun ColorLegend(
+    extensionStats: List<ExtensionStat>,
+    modifier: Modifier = Modifier
+) {
+    if (extensionStats.isEmpty()) return
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        extensionStats.take(12).forEach { stat ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(getExtensionColor(stat.extension))
+                )
+                Spacer(modifier = Modifier.width(3.dp))
+                Text(
+                    text = stat.extension.ifEmpty { "?" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
