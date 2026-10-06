@@ -74,10 +74,11 @@ impl CushionSurface {
         y1: f32,
         y2: f32,
     ) -> gpui::Rgba {
-        let mx = (x1 + x2) * 0.5;
-        let my = (y1 + y2) * 0.5;
-        // Directional light from top-left
-        let intensity = self.compute_intensity(mx, my, -1.0, -1.0, 2.0);
+        // Sample light at top-left 30% to capture the cushion normal slope
+        let sx = x1 + (x2 - x1) * 0.30;
+        let sy = y1 + (y2 - y1) * 0.30;
+        // Directional light from top-left: L = (-1.0, -1.0, 1.5)
+        let intensity = self.compute_intensity(sx, sy, -1.0, -1.0, 1.5);
 
         gpui::Rgba {
             r: (base_color.r * intensity).clamp(0.0, 1.0),

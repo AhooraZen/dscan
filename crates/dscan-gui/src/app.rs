@@ -237,8 +237,10 @@ impl Render for DscanApp {
         let total_h: f32 = size.height.into();
         let avail_h = (total_h - 56.0 - 38.0).max(100.0);
 
-        // Treemap gets 55% of available vertical space
-        self.state.update_layout_size(avail_w, avail_h * 0.55);
+        // Treemap sits at y = 56.0 + avail_h * 0.45 and gets 55% of available vertical space
+        let treemap_h = avail_h * 0.55;
+        self.state.treemap_origin_y = 56.0 + (avail_h * 0.45);
+        self.state.update_layout_size(avail_w, treemap_h);
 
         let mut root = div()
             .id("dscan-app-root")

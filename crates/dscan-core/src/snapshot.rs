@@ -233,6 +233,31 @@ pub fn build_extension_breakdown(
     }
 }
 
+fn strip_root_prefix<'a>(path: &'a Path, root: &Path) -> Option<std::borrow::Cow<'a, Path>> {
+    if root == Path::new(".") || root.as_os_str().is_empty() {
+        return Some(std::borrow::Cow::Borrowed(path));
+    }
+    if let Ok(rel) = path.strip_prefix(root) {
+        return Some(std::borrow::Cow::Borrowed(rel));
+    }
+    let root_str = root.to_string_lossy();
+    let trimmed_root = root_str.trim_end_matches(['/', '\\']);
+    if !trimmed_root.is_empty() {
+        let path_str = path.to_string_lossy();
+        if path_str.starts_with(trimmed_root) {
+            let rest = &path_str[trimmed_root.len()..];
+            let trimmed_rest = rest.trim_start_matches(['/', '\\']);
+            let normalized = trimmed_rest.replace('\\', "/");
+            return Some(std::borrow::Cow::Owned(PathBuf::from(normalized)));
+        }
+    }
+    if path.is_relative() {
+        Some(std::borrow::Cow::Borrowed(path))
+    } else {
+        None
+    }
+}
+
 pub fn build_treemap_nodes(
     root_path: &Path,
     top_dirs: &[(PathBuf, u64)],
@@ -269,16 +294,7 @@ pub fn build_treemap_nodes(
 
     // 1. Insert hierarchical directory structure
     for (dir_path, dir_bytes) in top_dirs {
-        let rel_opt = if root_path == Path::new(".") || root_path.as_os_str().is_empty() {
-            Some(dir_path.as_path())
-        } else if let Ok(rel) = dir_path.strip_prefix(root_path) {
-            Some(rel)
-        } else if dir_path.is_relative() {
-            Some(dir_path.as_path())
-        } else {
-            None
-        };
-        let Some(rel) = rel_opt else {
+        let Some(rel) = strip_root_prefix(dir_path.as_path(), root_path) else {
             continue;
         };
         if rel.as_os_str().is_empty() {
@@ -297,7 +313,7 @@ pub fn build_treemap_nodes(
             let comp_str = component.as_os_str().to_string_lossy().to_string();
             current_ancestor.push(component);
 
-            let is_exact = current_ancestor == rel;
+            let is_exact = current_ancestor.as_path() == rel.as_ref();
             if let Some(&existing_id) = path_to_id.get(&current_ancestor) {
                 if is_exact && nodes[existing_id as usize].total_bytes == 0 {
                     nodes[existing_id as usize].total_bytes = *dir_bytes;
@@ -331,16 +347,7 @@ pub fn build_treemap_nodes(
         if nodes.len() >= max_nodes {
             break;
         }
-        let rel_opt = if root_path == Path::new(".") || root_path.as_os_str().is_empty() {
-            Some(file_path.as_path())
-        } else if let Ok(rel) = file_path.strip_prefix(root_path) {
-            Some(rel)
-        } else if file_path.is_relative() {
-            Some(file_path.as_path())
-        } else {
-            None
-        };
-        let Some(rel) = rel_opt else {
+        let Some(rel) = strip_root_prefix(file_path.as_path(), root_path) else {
             continue;
         };
         let parent_rel = rel.parent().unwrap_or(Path::new(""));
@@ -480,6 +487,23 @@ mod tests {
             .map(|&id| nodes[id as usize].total_bytes)
             .sum();
         assert_eq!(root_children_sum, nodes[0].total_bytes);
+    }
+
+    #[test]
+    fn test_build_treemap_nodes_windows_drive_prefix() {
+        let root = PathBuf::from("C:\\");
+        let top_dirs = vec![
+            (PathBuf::from("C:\\Windows"), 500_000),
+            (PathBuf::from("C:\\Users\\User"), 1_000_000),
+        ];
+        let top_files = vec![
+            (800_000, PathBuf::from("C:\\Users\\User\\file.iso")),
+        ];
+
+        let nodes = build_treemap_nodes(&root, &top_dirs, &top_files, 1_500_000, 4, 100);
+        assert!(!nodes.is_empty());
+        let file = nodes.iter().find(|n| n.name == "file.iso");
+        assert!(file.is_some(), "file.iso should be found under C:\\");
     }
 
     #[test]

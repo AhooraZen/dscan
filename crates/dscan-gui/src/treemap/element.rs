@@ -96,6 +96,8 @@ impl Element for CushionTreemapElement {
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
+        style.size.width = gpui::relative(1.0).into();
+        style.size.height = gpui::relative(1.0).into();
         style.refine(&self.style);
         let layout_id = window.request_layout(style, [], cx);
         (layout_id, ())
@@ -128,7 +130,7 @@ impl Element for CushionTreemapElement {
         let origin_y = bounds.origin.y;
 
         for node in &self.nodes {
-            if node.is_dir {
+            if node.has_children {
                 continue;
             }
 
@@ -147,7 +149,11 @@ impl Element for CushionTreemapElement {
                 ),
             };
 
-            let base_color = theme::extension_color(&node.extension);
+            let base_color = if node.is_dir {
+                theme::extension_color("[dir]")
+            } else {
+                theme::extension_color(&node.extension)
+            };
             let mut shaded_color =
                 node.cushion
                     .shade_color(base_color, r.x, r.x + r.w, r.y, r.y + r.h);

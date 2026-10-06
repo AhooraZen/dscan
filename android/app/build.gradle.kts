@@ -16,11 +16,19 @@ android {
         versionName = "0.6.0"
 
         ndk {
-            abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+            abiFilters.add("arm64-v8a")
         }
     }
 
     signingConfigs {
+        create("release") {
+            storeFile = file("release.keystore")
+            storePassword = "android"
+            keyAlias = "dscan"
+            keyPassword = "android"
+            enableV1Signing = true
+            enableV2Signing = true
+        }
         getByName("debug") {
             enableV1Signing = true
             enableV2Signing = true
@@ -30,7 +38,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

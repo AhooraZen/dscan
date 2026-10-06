@@ -146,6 +146,7 @@ pub fn extension_color(ext: &str) -> Rgba {
         ".log" | ".tmp" | ".bak" => EXTENSION_PALETTE[13],
         ".html" | ".css" | ".scss" | ".xml" => EXTENSION_PALETTE[14],
         "[other]" | "[misc]" | "" => EXTENSION_PALETTE[15],
+        "[dir]" => const_rgb(0xFBBF24),
         _ => {
             let hash = normalized
                 .bytes()

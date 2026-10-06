@@ -45,6 +45,7 @@ pub struct LaidOutTreemapNode {
     pub extension: String,
     pub total_bytes: u64,
     pub is_dir: bool,
+    pub has_children: bool,
     pub depth: u16,
     pub rect: Rect,
     pub cushion: CushionSurface,
@@ -239,6 +240,7 @@ pub fn build_hierarchical_layout(
         extension: root_node.extension.clone(),
         total_bytes: root_node.total_bytes,
         is_dir: root_node.is_dir,
+        has_children: root_node.is_dir && !root_node.children_ids.is_empty(),
         depth: root_node.rel_depth,
         rect: root_bounds,
         cushion: initial_cushion,
@@ -293,6 +295,8 @@ pub fn build_hierarchical_layout(
                 h,
             );
 
+            let has_children = child_node.is_dir && !child_node.children_ids.is_empty();
+
             result.push(LaidOutTreemapNode {
                 id: child_node.id,
                 parent_id: child_node.parent_id,
@@ -300,13 +304,13 @@ pub fn build_hierarchical_layout(
                 extension: child_node.extension.clone(),
                 total_bytes: child_node.total_bytes,
                 is_dir: child_node.is_dir,
+                has_children,
                 depth,
                 rect: child_rect,
                 cushion: child_cushion,
             });
 
-            if child_node.is_dir
-                && !child_node.children_ids.is_empty()
+            if has_children
                 && child_rect.w > 4.0
                 && child_rect.h > 4.0
             {

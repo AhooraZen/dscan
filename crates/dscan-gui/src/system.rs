@@ -66,6 +66,7 @@ pub fn is_safe_to_trash(path: &Path, scan_root: &Path) -> Result<(), &'static st
     }
     // Disallow essential system directories
     let p_str = path.to_string_lossy();
+    let p_lower = p_str.to_lowercase();
     let forbidden = [
         "/bin",
         "/sbin",
@@ -75,15 +76,18 @@ pub fn is_safe_to_trash(path: &Path, scan_root: &Path) -> Result<(), &'static st
         "/dev",
         "/proc",
         "/sys",
-        "C:\\Windows",
-        "C:\\Program Files",
-        "C:\\Program Files (x86)",
+        "c:\\windows",
+        "c:/windows",
+        "c:\\program files",
+        "c:/program files",
+        "c:\\program files (x86)",
+        "c:/program files (x86)",
     ];
     for f in forbidden {
-        if p_str.starts_with(f)
-            && (p_str.len() == f.len()
-                || p_str.as_bytes()[f.len()] == b'/'
-                || p_str.as_bytes()[f.len()] == b'\\')
+        if p_lower.starts_with(f)
+            && (p_lower.len() == f.len()
+                || p_lower.as_bytes()[f.len()] == b'/'
+                || p_lower.as_bytes()[f.len()] == b'\\')
         {
             return Err("Cannot trash critical operating system path");
         }
@@ -95,8 +99,10 @@ pub fn is_safe_to_trash(path: &Path, scan_root: &Path) -> Result<(), &'static st
 pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt as _;
+        let p = path.to_string_lossy();
         std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path.display()))
+            .raw_arg(format!("/select,\"{p}\""))
             .spawn()
             .map_err(|e| e.to_string())?;
     }

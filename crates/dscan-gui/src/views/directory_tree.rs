@@ -36,7 +36,7 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                 .text_color(t.text_dim)
                 .justify_between()
                 .items_center()
-                .child(div().w(px(240.0)).child("Name"))
+                .child(div().flex_1().min_w(px(280.0)).child("Name"))
                 .child(div().w(px(80.0)).text_right().child("Size"))
                 .child(div().w(px(55.0)).text_right().child("%"))
                 .child(div().w(px(55.0)).text_right().child("Items"))
@@ -173,7 +173,8 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                 // Name column with indent and expand toggle
                                 div()
                                     .h_flex()
-                                    .w(px(240.0))
+                                    .flex_1()
+                                    .min_w(px(280.0))
                                     .items_center()
                                     .pl(px(indent))
                                     .gap_1()

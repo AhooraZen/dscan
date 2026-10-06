@@ -23,7 +23,7 @@ fn main() {
             KeyBinding::new("escape", CancelScan, None),
         ]);
 
-        let bounds = WindowBounds::centered(size(px(1280.0), px(800.0)), cx);
+        let bounds = WindowBounds::centered(size(px(1440.0), px(920.0)), cx);
 
         let window_options = WindowOptions {
             window_bounds: Some(bounds),

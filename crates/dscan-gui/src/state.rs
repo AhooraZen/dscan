@@ -28,6 +28,7 @@ pub struct AppState {
     pub is_complete: bool,
     pub layout_width: f32,
     pub layout_height: f32,
+    pub treemap_origin_y: f32,
     pub theme_mode: crate::theme::ThemeMode,
 }
 
@@ -43,7 +44,13 @@ impl AppState {
         let target_path = drives
             .first()
             .map(|d| d.mount_point.clone())
-            .unwrap_or_else(|| PathBuf::from("/"));
+            .unwrap_or_else(|| {
+                if cfg!(windows) {
+                    PathBuf::from("C:\\")
+                } else {
+                    PathBuf::from("/")
+                }
+            });
 
         Self {
             target_path,
@@ -63,6 +70,7 @@ impl AppState {
             is_complete: false,
             layout_width: 800.0,
             layout_height: 500.0,
+            treemap_origin_y: 0.0,
             theme_mode: crate::theme::ThemeMode::Dark,
         }
     }
@@ -85,7 +93,7 @@ impl AppState {
         self.target_path = path.to_path_buf();
         let opts = ScanOptions {
             target_path: path.to_string_lossy().to_string(),
-            top_limit: 500,
+            top_limit: 5000,
             max_depth: 8,
             threads: threads.max(1),
             excludes: vec![],
@@ -151,9 +159,9 @@ impl AppState {
             self.is_scanning = false;
             self.is_paused = false;
 
-            // Retrieve hierarchical view up to depth 6 and 2048 nodes
-            self.raw_nodes = session.get_hierarchical_view(6, 2048);
-            self.extensions = session.get_extension_breakdown(16);
+            // Retrieve hierarchical view up to depth 8 and 8192 nodes
+            self.raw_nodes = session.get_hierarchical_view(8, 8192);
+            self.extensions = session.get_extension_breakdown(24);
 
             self.rebuild_layout();
         }
@@ -182,11 +190,16 @@ impl AppState {
         }
     }
 
-    /// Find node id at local canvas coordinate (px, py)
-    pub fn hit_test(&self, px: f32, py: f32) -> Option<u32> {
+    /// Find node id at window coordinate (window_px, window_py)
+    pub fn hit_test(&self, window_px: f32, window_py: f32) -> Option<u32> {
+        let px = window_px;
+        let py = window_py - self.treemap_origin_y;
+        if py < 0.0 || py > self.layout_height || px < 0.0 || px > self.layout_width {
+            return None;
+        }
         // Search leaf nodes first, reverse order (topmost)
         for node in self.layout_nodes.iter().rev() {
-            if !node.is_dir && node.rect.contains(px, py) {
+            if !node.has_children && node.rect.contains(px, py) {
                 return Some(node.id);
             }
         }

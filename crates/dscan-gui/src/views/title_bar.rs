@@ -76,7 +76,13 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
         )
         .child(
             // Center drive chips
-            div().h_flex().items_center().gap(px(6.0)).children(
+            div()
+                .h_flex()
+                .items_center()
+                .gap(px(6.0))
+                .overflow_x_hidden()
+                .max_w(px(480.0))
+                .children(
                 app.state.drives.iter().enumerate().map(|(idx, drive)| {
                     let is_selected = idx == app.state.selected_drive_idx;
                     let mount_str = drive.mount_point.to_string_lossy().to_string();
