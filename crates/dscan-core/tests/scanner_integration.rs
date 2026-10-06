@@ -55,7 +55,8 @@ fn test_synthetic_tree_matches_du() {
             assert!(
                 result.total_bytes > 0 && result.total_bytes <= du_bytes,
                 "dscan total_bytes ({}) must be <= du -s -B1 ({}) and > 0",
-                result.total_bytes, du_bytes
+                result.total_bytes,
+                du_bytes
             );
         }
     }

@@ -1181,8 +1181,9 @@ fn scan_directory_tree_windows(
             restart_scan = false;
 
             let mut offset = 0usize;
+            let fn_offset = std::mem::offset_of!(FileIdBothDirInfo, file_name);
             loop {
-                if offset + std::mem::size_of::<FileIdBothDirInfo>() > info_bytes {
+                if offset + fn_offset > info_bytes {
                     break;
                 }
 
@@ -1194,7 +1195,6 @@ fn scan_directory_tree_windows(
                 let name_len_bytes = entry.file_name_length as usize;
                 let name_len_wchars = name_len_bytes / std::mem::size_of::<u16>();
 
-                let fn_offset = std::mem::offset_of!(FileIdBothDirInfo, file_name);
                 if offset + fn_offset + name_len_bytes > info_bytes {
                     break;
                 }
