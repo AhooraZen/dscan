@@ -1483,14 +1483,14 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dscan"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "dscan-core",
 ]
 
 [[package]]
 name = "dscan-android"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "dscan-core",
  "jni",
@@ -1502,7 +1502,7 @@ version = "0.6.1"
 
 [[package]]
 name = "dscan-gui"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "dscan-core",
  "gpui-kit",

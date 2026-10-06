@@ -1,6 +1,6 @@
 [package]
 name = "dscan-gui"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 authors = ["AhooraZen <ahoora935137@gmail.com>"]
 description = "Native GPU-accelerated WinDirStat cushion treemap visualizer for dscan"
