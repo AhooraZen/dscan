@@ -9,7 +9,6 @@ default-members = [
     "crates/dscan-core",
     "crates/dscan-cli",
 ]
-default-run = "dscan"
 
 [profile.release]
 opt-level = 3

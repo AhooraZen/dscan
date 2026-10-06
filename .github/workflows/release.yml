@@ -9,6 +9,15 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
 jobs:
   build-cli:
     name: Build CLI (${{ matrix.target }})
@@ -34,6 +43,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install Mold Linker
+        if: matrix.os == 'ubuntu-latest' && matrix.target != 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y mold clang
+
+      - name: Install aarch64 cross-linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -43,58 +60,57 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          cache-all-crates: "true"
 
-      - name: Install aarch64 cross-linker
+      - name: Build dscan-cli (Linux x86_64 with Mold)
+        if: matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64-unknown-linux-gnu'
+        run: mold -run cargo build --release -p dscan --target ${{ matrix.target }}
+
+      - name: Build dscan-cli (Linux aarch64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Build dscan-cli
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release -p dscan --target ${{ matrix.target }}
+
+      - name: Build dscan-cli (Windows x64)
+        if: matrix.os == 'windows-latest'
         run: cargo build --release -p dscan --target ${{ matrix.target }}
 
       - name: Package Linux artifact
         if: matrix.os == 'ubuntu-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../${{ matrix.asset_name }} ${{ matrix.bin_name }}
+          tar -czf ../../../${{ matrix.asset_name }} ${{ matrix.bin_name }}
           cd ../../..
+          sha256sum ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
 
       - name: Package Windows artifact
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.bin_name }} -DestinationPath ${{ matrix.asset_name }}
+          $hash = (Get-FileHash -Path ${{ matrix.asset_name }} -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ matrix.asset_name }}" | Out-File -FilePath "${{ matrix.asset_name }}.sha256" -Encoding ascii
 
-      - name: Upload CLI Artifact
+      - name: Upload CLI Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: ${{ matrix.asset_name }}
+          path: |
+            ${{ matrix.asset_name }}
+            ${{ matrix.asset_name }}.sha256
 
-  build-desktop-gui:
+  build-gui-linux:
     name: Build Desktop GUI (Linux x64)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install system dependencies (WebKitGTK, GLib, etc.)
+      - name: Install Linux GPUI System Libraries & Mold
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libjavascriptcoregtk-4.1-dev
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Build frontend
-        run: |
-          cd crates/dscan-gui/ui
-          bun install --frozen-lockfile
-          bun run build
-          cd ../../..
+          sudo apt-get install -y libasound2-dev libfontconfig1-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libvulkan-dev mold clang
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -102,146 +118,62 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
         with:
-          key: gui-linux-x64
+          key: gui-linux-release
+          cache-all-crates: "true"
 
-      - name: Build Tauri GUI
+      - name: Build GPUI GUI (with Mold)
         run: |
-          cargo build --release -p dscan-gui
+          mold -run cargo build --release -p dscan-gui
           mkdir -p release-gui
           cp target/release/dscan-gui release-gui/
-          tar -czvf dscan-gui-linux-x86_64.tar.gz -C release-gui dscan-gui
+          tar -czf dscan-gui-linux-x86_64.tar.gz -C release-gui dscan-gui
+          sha256sum dscan-gui-linux-x86_64.tar.gz > dscan-gui-linux-x86_64.tar.gz.sha256
 
-      - name: Upload GUI Artifact
+      - name: Upload GUI Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: dscan-gui-linux-x86_64.tar.gz
-          path: dscan-gui-linux-x86_64.tar.gz
+          path: |
+            dscan-gui-linux-x86_64.tar.gz
+            dscan-gui-linux-x86_64.tar.gz.sha256
 
-  build-desktop-gui-windows:
+  build-gui-windows:
     name: Build Desktop GUI (Windows x64)
     runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Build frontend
-        shell: pwsh
-        run: |
-          cd crates/dscan-gui/ui
-          bun install --frozen-lockfile
-          bun run build
-          cd ../../..
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
         with:
-          key: gui-win-x64
+          key: gui-win-release
+          cache-all-crates: "true"
 
-      - name: Build Tauri GUI Windows
+      - name: Build GPUI GUI Windows
         shell: pwsh
         run: |
           cargo build --release -p dscan-gui
           mkdir -p release-gui-win
           Copy-Item target/release/dscan-gui.exe release-gui-win/
           Compress-Archive -Path release-gui-win/dscan-gui.exe -DestinationPath dscan-gui-windows-x64.zip
+          $hash = (Get-FileHash -Path dscan-gui-windows-x64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  dscan-gui-windows-x64.zip" | Out-File -FilePath "dscan-gui-windows-x64.zip.sha256" -Encoding ascii
 
       - name: Upload Windows GUI Artifact
         uses: actions/upload-artifact@v4
         with:
           name: dscan-gui-windows-x64.zip
-          path: dscan-gui-windows-x64.zip
-
-  build-android-gui:
-    name: Build Android GUI (APK arm64 & armv7)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Install Android Build Tools and NDK
-        run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Build frontend
-        run: |
-          cd crates/dscan-gui/ui
-          bun install --frozen-lockfile
-          bun run build
-          cd ../../..
-
-      - name: Install Rust toolchain & Android targets
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
-        with:
-          key: android-gui
-
-      - name: Install pre-built Tauri CLI via cargo-binstall
-        run: |
-          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall --no-confirm tauri-cli@^2.0.0
-
-      - name: Init & Build Tauri Android (arm64-v8a & armeabi-v7a)
-        run: |
-          export ANDROID_NDK_HOME="/usr/local/lib/android/sdk/ndk/26.1.10909125"
-          export NDK_HOME="$ANDROID_NDK_HOME"
-          export PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          cd crates/dscan-gui/src-tauri
-          cargo tauri android init
-          cargo tauri android build --apk --target aarch64 --target armv7
-          cd ../../..
-
-      - name: Align and Sign Android APK
-        run: |
-          keytool -genkeypair -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
-          ZIPALIGN="$ANDROID_HOME/build-tools/34.0.0/zipalign"
-          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
-
-          mkdir -p signed-apks
-          for apk in $(find crates/dscan-gui/src-tauri/gen/android -name "*.apk"); do
-            echo "Processing $apk..."
-            base=$(basename "$apk" .apk)
-            $ZIPALIGN -v -p 4 "$apk" "signed-apks/${base}-aligned.apk"
-            $APKSIGNER sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android "signed-apks/${base}-aligned.apk"
-            $APKSIGNER verify "signed-apks/${base}-aligned.apk"
-          done
-
-          cp signed-apks/*-aligned.apk ./dscan-gui-android-universal.apk
-          ls -lh *.apk
-
-      - name: Upload Android APKs
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-apks
-          path: dscan-gui-android-universal.apk
+          path: |
+            dscan-gui-windows-x64.zip
+            dscan-gui-windows-x64.zip.sha256
 
   publish-github-release:
     name: Publish GitHub Release
-    needs: [build-cli, build-desktop-gui, build-desktop-gui-windows, build-android-gui]
-    if: always() && !cancelled()
+    needs: [build-cli, build-gui-linux, build-gui-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -252,11 +184,12 @@ jobs:
         with:
           path: release-artifacts
 
-      - name: Flatten release artifacts
+      - name: Assemble Release Assets and Checksums
         run: |
           mkdir -p dist-release
-          find release-artifacts -type f -exec cp {} dist-release/ \;
-          ls -la dist-release/
+          find release-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} dist-release/ \;
+          find release-artifacts -type f -name "*.sha256" -exec cat {} + > dist-release/SHA256SUMS.txt
+          cat dist-release/SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

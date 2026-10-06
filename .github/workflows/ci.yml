@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint-and-format:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          cache-all-crates: "true"
+
+      - name: Format Check
+        run: cargo fmt --check
+
+      - name: Clippy (Workspace Core + CLI)
+        run: cargo clippy --all-targets -- -D warnings
+
+  test-linux:
+    name: Test Linux (Core + CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Mold Linker
+        run: sudo apt-get update && sudo apt-get install -y mold clang
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: linux-test
+          cache-all-crates: "true"
+
+      - name: Run Tests (with Mold)
+        run: mold -run cargo test --workspace
+
+  test-windows:
+    name: Test Windows (Core + CLI)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: win-test
+          cache-all-crates: "true"
+
+      - name: Run Windows Core + CLI Tests
+        run: cargo test -p dscan-core -p dscan-cli
+
+  check-gui-linux:
+    name: Check GUI (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux GPUI System Libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libfontconfig1-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libvulkan-dev mold clang
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: gui-linux-check
+          cache-all-crates: "true"
+
+      - name: Check GPUI GUI Crate
+        run: mold -run cargo check -p dscan-gui
+
+  check-gui-windows:
+    name: Check GUI (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: gui-win-check
+          cache-all-crates: "true"
+
+      - name: Check Windows GPUI GUI Crate
+        run: cargo check -p dscan-gui
