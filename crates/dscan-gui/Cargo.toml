@@ -7,7 +7,7 @@ description = "Native GPU-accelerated WinDirStat cushion treemap visualizer for 
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-dscan-core = { version = "0.6.0", path = "../dscan-core" }
+dscan-core = { version = "0.6.1", path = "../dscan-core" }
 gpui-kit = "0.7"
 open = "5.3"
 sysinfo = "0.33"

@@ -11,5 +11,5 @@ name = "dscan"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-dscan-core = { version = "0.6.0", path = "../dscan-core" }
+dscan-core = { version = "0.6.1", path = "../dscan-core" }
 jni = { version = "0.21", default-features = false }
