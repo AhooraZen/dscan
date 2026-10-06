@@ -75,6 +75,32 @@ pub const SYS_OPENAT2: i64 = 437;
 )))]
 pub const SYS_OPENAT2: i64 = 437;
 
+#[cfg(target_arch = "x86_64")]
+pub const SYS_PRLIMIT64: i64 = 302;
+
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "loongarch64"
+))]
+pub const SYS_PRLIMIT64: i64 = 261;
+
+#[cfg(target_arch = "arm")]
+pub const SYS_PRLIMIT64: i64 = 369;
+
+#[cfg(target_arch = "x86")]
+pub const SYS_PRLIMIT64: i64 = 340;
+
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "loongarch64",
+    target_arch = "arm",
+    target_arch = "x86"
+)))]
+pub const SYS_PRLIMIT64: i64 = 302;
+
 pub const RESOLVE_NO_XDEV: u64 = 0x01;
 pub const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 pub const RESOLVE_NO_SYMLINKS: u64 = 0x04;
@@ -183,6 +209,40 @@ pub fn makedev(major: u32, minor: u32) -> u64 {
         | (((minor & !0xff) as u64) << 12)
 }
 
+#[inline(always)]
+pub fn dev_major(dev: u64) -> u32 {
+    (((dev >> 8) & 0xfff) | ((dev >> 32) & !0xfff)) as u32
+}
+
+#[inline(always)]
+pub fn dev_minor(dev: u64) -> u32 {
+    ((dev & 0xff) | ((dev >> 12) & !0xff)) as u32
+}
+
+/// Query Linux sysfs to determine if the block device is rotational (HDD) or solid-state (SSD/NVMe).
+/// Checks /sys/dev/block/<major>:<minor>/queue/rotational and parent partition fallback.
+pub fn is_rotational_device(dev: u64) -> bool {
+    if dev == 0 {
+        return false;
+    }
+    let major = dev_major(dev);
+    let minor = dev_minor(dev);
+
+    // 1. Check direct device path (e.g. whole disk)
+    let p1 = format!("/sys/dev/block/{}:{}/queue/rotational", major, minor);
+    if let Ok(content) = std::fs::read_to_string(&p1) {
+        return content.trim() == "1";
+    }
+
+    // 2. Check parent device path (e.g. partition sda1 -> sda)
+    let p2 = format!("/sys/dev/block/{}:{}/../queue/rotational", major, minor);
+    if let Ok(content) = std::fs::read_to_string(&p2) {
+        return content.trim() == "1";
+    }
+
+    false
+}
+
 /// Issue raw statx syscall.
 #[inline(always)]
 pub fn sys_statx(
@@ -279,6 +339,50 @@ pub fn pin_thread_to_core(core_id: usize) -> bool {
     }
 }
 
+/// Dynamically bump the process soft file descriptor limit (`RLIMIT_NOFILE`) to the hard maximum
+/// using raw `prlimit64` syscall. Zero dependencies, instant startup.
+pub fn raise_fd_limit() {
+    #[repr(C)]
+    struct Rlimit64 {
+        rlim_cur: u64,
+        rlim_max: u64,
+    }
+
+    let mut limit = Rlimit64 {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+
+    // Get current limits (pid 0 = current process, resource 7 = RLIMIT_NOFILE)
+    // SAFETY: SYS_PRLIMIT64 syscall with valid pointers.
+    let ret = unsafe {
+        syscall(
+            SYS_PRLIMIT64,
+            0i64,
+            7i64, // RLIMIT_NOFILE
+            std::ptr::null::<Rlimit64>() as i64,
+            &mut limit as *mut Rlimit64 as i64,
+        )
+    };
+
+    if ret == 0 && limit.rlim_cur < limit.rlim_max {
+        let new_limit = Rlimit64 {
+            rlim_cur: limit.rlim_max,
+            rlim_max: limit.rlim_max,
+        };
+        // SAFETY: SYS_PRLIMIT64 syscall to raise soft limit to hard limit.
+        unsafe {
+            syscall(
+                SYS_PRLIMIT64,
+                0i64,
+                7i64,
+                &new_limit as *const Rlimit64 as i64,
+                std::ptr::null_mut::<Rlimit64>() as i64,
+            );
+        }
+    }
+}
+
 /// Open a directory with direct flags (O_DIRECTORY | O_CLOEXEC | O_NOATIME).
 /// If open with O_NOATIME fails (e.g. unprivileged user), falls back to opening without O_NOATIME.
 pub fn open_dir(path: &Path) -> Option<i32> {
@@ -296,7 +400,23 @@ pub fn open_dir(path: &Path) -> Option<i32> {
     // Fallback without O_NOATIME for unprivileged scans
     // SAFETY: path_c is a valid null-terminated C string.
     let fd = unsafe { open(path_c.as_ptr(), O_RDONLY | O_DIRECTORY | O_CLOEXEC) };
-    if fd >= 0 { Some(fd) } else { None }
+    if fd >= 0 {
+        return Some(fd);
+    }
+
+    // Adaptive retry on EMFILE / ENFILE after yielding thread
+    let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    if err == 24 /* EMFILE */ || err == 23
+    /* ENFILE */
+    {
+        std::thread::yield_now();
+        let retry_fd = unsafe { open(path_c.as_ptr(), O_RDONLY | O_DIRECTORY | O_CLOEXEC) };
+        if retry_fd >= 0 {
+            return Some(retry_fd);
+        }
+    }
+
+    None
 }
 
 static HAS_OPENAT2: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -441,5 +561,21 @@ mod tests {
             close(cur_fd);
             close(root_fd);
         }
+    }
+
+    #[test]
+    fn test_raise_fd_limit() {
+        raise_fd_limit();
+    }
+
+    #[test]
+    fn test_rotational_detection_does_not_panic() {
+        let root_meta = std::fs::metadata("/").expect("stat root");
+        use std::os::unix::fs::MetadataExt;
+        let dev = root_meta.dev();
+        let is_rot = is_rotational_device(dev);
+        // Valid boolean response without panic; on zero dev returns false
+        assert!(!is_rotational_device(0));
+        let _ = is_rot;
     }
 }

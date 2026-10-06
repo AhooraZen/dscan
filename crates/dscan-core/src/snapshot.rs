@@ -288,7 +288,11 @@ pub fn build_treemap_nodes(
             let comp_str = component.as_os_str().to_string_lossy().to_string();
             current_ancestor.push(component);
 
+            let is_exact = current_ancestor == rel;
             if let Some(&existing_id) = path_to_id.get(&current_ancestor) {
+                if is_exact && nodes[existing_id as usize].total_bytes == 0 {
+                    nodes[existing_id as usize].total_bytes = *dir_bytes;
+                }
                 parent_id = existing_id;
             } else {
                 if nodes.len() >= max_nodes {
@@ -299,7 +303,7 @@ pub fn build_treemap_nodes(
                     id: node_id,
                     parent_id,
                     name: comp_str,
-                    total_bytes: *dir_bytes,
+                    total_bytes: if is_exact { *dir_bytes } else { 0 },
                     direct_bytes: 0,
                     rel_depth: depth,
                     is_dir: true,

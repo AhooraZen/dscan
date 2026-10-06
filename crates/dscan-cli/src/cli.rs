@@ -54,15 +54,7 @@ impl CliOptions {
         let mut cross_filesystems = false;
         let mut json = false;
         let mut ext = false;
-
-        let cores = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(8);
-        #[cfg(target_os = "android")]
-        let default_threads = (cores * 2).clamp(4, 16);
-        #[cfg(not(target_os = "android"))]
-        let default_threads = (cores * 4).clamp(8, 64);
-        let mut threads = default_threads;
+        let mut user_threads: Option<usize> = None;
 
         let mut i = 1;
         while i < args.len() {
@@ -87,7 +79,7 @@ impl CliOptions {
                 }
                 "--threads" | "-j" => {
                     if let Some(n) = parse_val(args, &mut i).and_then(|v| v.parse::<usize>().ok()) {
-                        threads = n.clamp(1, 64);
+                        user_threads = Some(n.clamp(1, 64));
                     }
                     i += 1;
                 }
@@ -165,6 +157,12 @@ impl CliOptions {
             // Drop exclude if target_path is within or equal to this exclude
             !abs_path.starts_with(ex_p)
         });
+
+        let threads = if let Some(n) = user_threads {
+            n
+        } else {
+            dscan_core::ScanOptions::auto_threads_for_path(abs_path)
+        };
 
         Some(Self {
             target_path,

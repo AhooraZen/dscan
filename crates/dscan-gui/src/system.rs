@@ -96,7 +96,7 @@ pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer")
-            .arg(format!("/select,\"{}\"", path.display()))
+            .arg(format!("/select,{}", path.display()))
             .spawn()
             .map_err(|e| e.to_string())?;
     }

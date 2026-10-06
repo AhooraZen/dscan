@@ -190,6 +190,17 @@ unsafe extern "system" {
     pub fn VirtualFree(lpAddress: *mut c_void, dwSize: usize, dwFreeType: u32) -> i32;
 
     pub fn GetLargePageMinimum() -> usize;
+
+    pub fn DeviceIoControl(
+        hDevice: RawHandle,
+        dwIoControlCode: u32,
+        lpInBuffer: *const c_void,
+        nInBufferSize: u32,
+        lpOutBuffer: *mut c_void,
+        nOutBufferSize: u32,
+        lpBytesReturned: *mut u32,
+        lpOverlapped: *mut c_void,
+    ) -> i32;
 }
 
 static NT_QUERY_DIR_EX: OnceLock<Option<NtQueryDirectoryFileExFn>> = OnceLock::new();
@@ -293,10 +304,9 @@ pub unsafe fn sys_nt_query_directory_file_fast(
         if ret != 0 {
             let mut actual_bytes = 0usize;
             let mut offset = 0usize;
-            let min_hdr = std::mem::size_of::<FileIdBothDirInfo>();
             let fn_offset = std::mem::offset_of!(FileIdBothDirInfo, file_name);
 
-            while offset + min_hdr <= len as usize {
+            while offset + fn_offset <= len as usize {
                 let entry = unsafe {
                     std::ptr::read_unaligned(
                         (buffer as *const u8).add(offset) as *const FileIdBothDirInfo
@@ -438,5 +448,93 @@ pub fn enable_virtual_terminal_processing() {
                 let _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
             }
         }
+    }
+}
+
+/// Query Windows volume to determine if the storage device incurs a seek penalty (HDD) or not (SSD/NVMe).
+/// Uses IOCTL_STORAGE_QUERY_PROPERTY with StorageDeviceSeekPenaltyProperty.
+pub fn is_rotational_path(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+
+    // Resolve volume root e.g. "\\\\.\\C:"
+    let path_str = path.to_string_lossy();
+    let volume_drive = if path_str.len() >= 2 && path_str.as_bytes()[1] == b':' {
+        format!("\\\\.\\{}:", path_str.chars().next().unwrap_or('C'))
+    } else {
+        "\\\\.\\C:".to_string()
+    };
+
+    let wide: Vec<u16> = std::ffi::OsStr::new(&volume_drive)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // Open volume handle
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            0, // No access rights required for query device properties
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+        return false;
+    }
+
+    #[repr(C)]
+    struct StoragePropertyQuery {
+        property_id: u32,
+        query_type: u32,
+        additional_parameters: [u8; 1],
+    }
+
+    #[repr(C)]
+    struct DeviceSeekPenaltyDescriptor {
+        version: u32,
+        size: u32,
+        incurs_seek_penalty: u8,
+    }
+
+    const STORAGE_DEVICE_SEEK_PENALTY_PROPERTY: u32 = 7;
+    const PROPERTY_STANDARD_QUERY: u32 = 0;
+    const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D1400;
+
+    let query = StoragePropertyQuery {
+        property_id: STORAGE_DEVICE_SEEK_PENALTY_PROPERTY,
+        query_type: PROPERTY_STANDARD_QUERY,
+        additional_parameters: [0],
+    };
+
+    let mut desc = DeviceSeekPenaltyDescriptor {
+        version: 0,
+        size: 0,
+        incurs_seek_penalty: 0,
+    };
+
+    let mut bytes_returned = 0u32;
+    let res = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            &query as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<StoragePropertyQuery>() as u32,
+            &mut desc as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<DeviceSeekPenaltyDescriptor>() as u32,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        )
+    };
+
+    unsafe { CloseHandle(handle) };
+
+    if res != 0 {
+        desc.incurs_seek_penalty != 0
+    } else {
+        false
     }
 }

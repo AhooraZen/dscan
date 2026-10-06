@@ -57,13 +57,7 @@ impl Default for ScanOptions {
             "hiberfil.sys".to_string(),
             "dumpstack.log.sys".to_string(),
         ];
-        let cores = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(8);
-        #[cfg(target_os = "android")]
-        let threads = (cores * 2).clamp(4, 16);
-        #[cfg(not(target_os = "android"))]
-        let threads = (cores * 4).clamp(8, 64);
+        let threads = Self::auto_threads_for_path(Path::new("."));
 
         Self {
             target_path: ".".to_string(),
@@ -75,6 +69,55 @@ impl Default for ScanOptions {
             cross_filesystems: false,
             collect_ext_stats: false,
         }
+    }
+}
+
+impl ScanOptions {
+    /// Dynamically determine optimal worker thread count based on hardware and underlying storage media.
+    /// - Rotational HDD / VPS: clamp to `1..=4` cores to prevent head-seeking I/O thrashing.
+    /// - NVMe / SSD: scale to `4x cores` (clamped 8..=64) to saturate asynchronous queue depth.
+    /// - Android: clamp to `2x cores` (clamped 4..=16) for thermal and battery preservation.
+    pub fn auto_threads_for_path(path: &Path) -> usize {
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(8);
+        #[cfg(target_os = "android")]
+        {
+            (cores * 2).clamp(4, 16)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let dev = get_path_dev(path);
+            if crate::sys::is_rotational(dev, path) {
+                cores.clamp(1, 4)
+            } else {
+                (cores * 4).clamp(8, 64)
+            }
+        }
+    }
+}
+
+/// Retrieve the device number for a path cross-platform.
+pub fn get_path_dev(path: &Path) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        path.metadata().map(|m| m.dev()).unwrap_or(0)
+    }
+    #[cfg(windows)]
+    {
+        if let Some(h) = crate::sys::open_dir(path) {
+            let dev = (unsafe { crate::sys::get_volume_serial_number(h) }).unwrap_or(0);
+            unsafe { crate::sys::close_handle(h) };
+            dev
+        } else {
+            0
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        0
     }
 }
 
@@ -837,19 +880,51 @@ fn scan_directory_tree(
         }
 
         #[cfg(target_os = "linux")]
-        if let Some(b) = batcher.as_mut() {
-            flush_statx_batch(
-                b,
-                batch,
-                current_node,
-                &mut local_dir_size,
-                local_files,
-                local_bytes,
-                local_top_files,
-                local_ext_stats,
-                local_arena,
-                state,
-            );
+        if let Some(b) = batcher.as_mut()
+            && batch.count > 0
+        {
+            if batch.count < 4 {
+                // Synchronous statx is faster for 1-3 files than io_uring_enter context switch
+                for i in 0..batch.count {
+                    let name_len = batch.name_lens[i];
+                    let name_ptr = batch.name_bufs[i].as_ptr() as *const std::ffi::c_char;
+                    let mut stx = crate::sys::Statx::default();
+                    let res = crate::sys::sys_statx(
+                        fd,
+                        name_ptr,
+                        AT_SYMLINK_NOFOLLOW | AT_STATX_DONT_SYNC,
+                        STATX_BLOCKS,
+                        &mut stx,
+                    );
+                    if res == 0 {
+                        let sz = stx.stx_blocks * 512;
+                        local_dir_size += sz;
+                        record_file_stat(local_files, local_bytes, sz, state);
+                        let name_bytes = &batch.name_bufs[i][..name_len];
+                        local_top_files.push(sz, current_node, name_bytes, local_arena);
+                        record_file_ext(
+                            local_ext_stats,
+                            name_bytes,
+                            sz,
+                            state.config.collect_ext_stats,
+                        );
+                    }
+                }
+                batch.count = 0;
+            } else {
+                flush_statx_batch(
+                    b,
+                    batch,
+                    current_node,
+                    &mut local_dir_size,
+                    local_files,
+                    local_bytes,
+                    local_top_files,
+                    local_ext_stats,
+                    local_arena,
+                    state,
+                );
+            }
         }
 
         local_arena.add_direct_bytes(current_node, local_dir_size);
@@ -903,6 +978,15 @@ fn scan_directory_tree(
                         path_stack.truncate(orig_len);
                         continue;
                     }
+                    Err(24 /* EMFILE */) | Err(23 /* ENFILE */) => {
+                        std::thread::yield_now();
+                        crate::sys::open_dir_at2(
+                            fd,
+                            name_c.as_ptr() as *const std::ffi::c_char,
+                            !state.config.cross_filesystems,
+                        )
+                        .ok()
+                    }
                     _ => None,
                 }
             } else {
@@ -946,10 +1030,19 @@ fn scan_directory_tree(
                 continue;
             }
 
-            if let Ok(meta) = entry.metadata() {
+            let meta_res = if state.config.follow_symlinks {
+                entry.metadata()
+            } else {
+                std::fs::symlink_metadata(&path)
+            };
+
+            if let Ok(meta) = meta_res {
+                let is_on_root_dev = state.config.cross_filesystems || meta.dev() == root_dev;
                 if meta.is_dir() {
-                    sub_dirs.push(name_bytes);
-                } else if meta.dev() == root_dev {
+                    if is_on_root_dev {
+                        sub_dirs.push(name_bytes);
+                    }
+                } else if is_on_root_dev {
                     let sz = meta.blocks() * 512;
                     local_dir_size += sz;
                     record_file_stat(local_files, local_bytes, sz, state);
@@ -1284,7 +1377,12 @@ fn scan_directory_tree_windows(
                 if excluded {
                     continue;
                 }
-                if let Ok(meta) = entry.metadata() {
+                let meta_res = if state.config.follow_symlinks {
+                    entry.metadata()
+                } else {
+                    entry.symlink_metadata()
+                };
+                if let Ok(meta) = meta_res {
                     if meta.is_dir() {
                         use std::os::windows::ffi::OsStrExt;
                         let wide_name: Vec<u16> = name.encode_wide().collect();
@@ -1570,6 +1668,8 @@ fn worker_loop(
 pub fn init_scan_state(
     options: &ScanOptions,
 ) -> Result<(Arc<GlobalState>, Vec<Worker<PathBuf>>), std::io::Error> {
+    crate::sys::raise_fd_limit();
+
     let root = Path::new(&options.target_path);
     let root_meta = root.metadata()?;
     #[cfg(unix)]
@@ -1749,59 +1849,71 @@ pub fn execute_workers_and_rollup(
         arenas.push(res.arena);
     }
 
-    // Sort all_dirs so duplicates (if any) are adjacent and can be merged in-place
-    all_dirs.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut deduped_dirs: Vec<(PathBuf, u64)> = Vec::with_capacity(all_dirs.len());
-    for (path, sz) in all_dirs {
-        if let Some(last) = deduped_dirs.last_mut()
-            && last.0 == path
-        {
-            last.1 += sz;
-        } else {
-            deduped_dirs.push((path, sz));
-        }
+    // 1. Accumulate all direct directory sizes into a single hash map
+    let mut dir_map: std::collections::HashMap<PathBuf, u64> =
+        std::collections::HashMap::with_capacity(all_dirs.len());
+
+    for (path, direct_sz) in all_dirs {
+        *dir_map.entry(path).or_default() += direct_sz;
     }
 
-    let max_depth = options.max_depth;
-    let mut rolled_up: Vec<(PathBuf, u64)> = deduped_dirs.clone();
+    // 2. Ensure root path exists in dir_map
+    dir_map.entry(root.to_path_buf()).or_default();
 
-    // Hierarchical bottom-up rollup: add each directory's shallow file size to all its ancestors
-    for (dir, direct_sz) in &deduped_dirs {
-        if *direct_sz == 0 {
-            continue;
-        }
-        let mut curr: &Path = dir;
-        let mut hit_root = false;
-        loop {
-            if curr == root {
-                hit_root = true;
-            }
-            let cur_depth = curr.components().count();
-            if cur_depth < base_depth {
+    // Ensure all intermediate ancestors up to root exist in dir_map
+    let initial_paths: Vec<PathBuf> = dir_map.keys().cloned().collect();
+    for path in initial_paths {
+        let mut curr = path.as_path();
+        while let Some(parent) = curr.parent() {
+            if parent.as_os_str().is_empty() || parent == curr {
                 break;
             }
-            let rel_depth = cur_depth.saturating_sub(base_depth);
-            if rel_depth <= max_depth && curr != dir {
-                match rolled_up.binary_search_by(|(p, _)| p.as_path().cmp(curr)) {
-                    Ok(idx) => rolled_up[idx].1 += *direct_sz,
-                    Err(idx) => rolled_up.insert(idx, (curr.to_path_buf(), *direct_sz)),
-                }
+            if parent.components().count() < base_depth {
+                break;
             }
-            match curr.parent() {
-                Some(p) if !p.as_os_str().is_empty() => curr = p,
-                _ => break,
+            dir_map.entry(parent.to_path_buf()).or_default();
+            if parent == root {
+                break;
             }
-        }
-        if !hit_root && dir != root {
-            match rolled_up.binary_search_by(|(p, _)| p.as_path().cmp(root)) {
-                Ok(idx) => rolled_up[idx].1 += *direct_sz,
-                Err(idx) => rolled_up.insert(idx, (root.to_path_buf(), *direct_sz)),
-            }
+            curr = parent;
         }
     }
 
-    // Filter to rel_depth <= max_depth and sort by size descending
-    let mut sorted_dirs: Vec<(PathBuf, u64)> = rolled_up
+    // 3. Sort unique directory paths by component depth descending: O(N log N)
+    let mut paths_by_depth: Vec<PathBuf> = dir_map.keys().cloned().collect();
+    paths_by_depth.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
+
+    // 4. Single-pass bottom-up rollup: each directory adds its accumulated total ONLY to its immediate parent
+    for dir in paths_by_depth {
+        if dir == root {
+            continue;
+        }
+        let child_total = dir_map.get(&dir).copied().unwrap_or(0);
+        if child_total == 0 {
+            continue;
+        }
+
+        let parent_opt = match dir.parent() {
+            Some(p) if !p.as_os_str().is_empty() => Some(p.to_path_buf()),
+            _ => {
+                if root != Path::new("") && dir != root {
+                    Some(root.to_path_buf())
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(parent) = parent_opt
+            && dir != parent
+        {
+            *dir_map.entry(parent).or_default() += child_total;
+        }
+    }
+
+    // 5. Filter to rel_depth <= max_depth and sort by size descending
+    let max_depth = options.max_depth;
+    let mut sorted_dirs: Vec<(PathBuf, u64)> = dir_map
         .into_iter()
         .filter(|(p, _)| {
             let d = p.components().count().saturating_sub(base_depth);

@@ -35,7 +35,9 @@ fn main() {
             ..Default::default()
         };
 
-        open_window(window_options, cx, |_, cx| cx.new(DscanApp::new))
-            .expect("failed to open dscan visualizer window");
+        if let Err(e) = open_window(window_options, cx, |_, cx| cx.new(DscanApp::new)) {
+            eprintln!("dscan-gui error: failed to initialize window: {e:?}");
+            std::process::exit(1);
+        }
     });
 }

@@ -9,7 +9,8 @@ pub mod work_stealing;
 pub use arena::{ArenaNode, DirArena, LocalTopFiles, TopFileCandidate};
 pub use format::format_bytes;
 pub use scanner::{
-    CliOptions, ProgressCallback, ScanConfig, ScanOptions, ScanResult, run_scan,
+    CliOptions, ProgressCallback, ScanConfig, ScanOptions, ScanResult, get_path_dev, run_scan,
     run_scan_with_progress,
 };
 pub use snapshot::{ExtensionStatDto, ScanProgressDto, ScanSession, TreemapNodeDto};
+pub use sys::is_rotational;
