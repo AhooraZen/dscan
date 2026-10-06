@@ -110,7 +110,7 @@ jobs:
       - name: Install Linux GPUI System Libraries & Mold
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libfontconfig1-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libvulkan-dev mold clang
+          sudo apt-get install -y libasound2-dev libfontconfig1-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libvulkan-dev mold clang pkg-config
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

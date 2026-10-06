@@ -59,7 +59,7 @@ jobs:
           cache-all-crates: "true"
 
       - name: Run Tests (with Mold)
-        run: mold -run cargo test --workspace
+        run: mold -run cargo test -p dscan-core -p dscan
 
   test-windows:
     name: Test Windows (Core + CLI)
@@ -78,7 +78,7 @@ jobs:
           cache-all-crates: "true"
 
       - name: Run Windows Core + CLI Tests
-        run: cargo test -p dscan-core -p dscan-cli
+        run: cargo test -p dscan-core -p dscan
 
   check-gui-linux:
     name: Check GUI (Linux)
@@ -90,7 +90,7 @@ jobs:
       - name: Install Linux GPUI System Libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libfontconfig1-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libvulkan-dev mold clang
+          sudo apt-get install -y libasound2-dev libfontconfig1-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libvulkan-dev mold clang pkg-config
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

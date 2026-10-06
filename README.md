@@ -1,51 +1,49 @@
 # dscan
 
 <p align="center">
-  <strong>The fastest disk space analyzer for Linux, Windows, and Android.</strong><br>
+  <strong>High-performance disk space analyzer for Linux and Windows.</strong><br>
   Direct kernel syscalls. Lock-free work-stealing. Zero external dependencies.
 </p>
 
 <p align="center">
   <a href="https://crates.io/crates/dscan"><img src="https://img.shields.io/crates/v/dscan.svg?style=flat-square&color=50fa7b" alt="Crates.io"></a>
   <a href="https://github.com/AhooraZen/dscan/releases"><img src="https://img.shields.io/github/v/release/AhooraZen/dscan?style=flat-square&color=8be9fd" alt="GitHub Release"></a>
-  <a href="https://github.com/AhooraZen/dscan/actions"><img src="https://img.shields.io/github/actions/workflow/status/AhooraZen/dscan/release.yml?style=flat-square" alt="Build Status"></a>
+  <a href="https://github.com/AhooraZen/dscan/actions"><img src="https://img.shields.io/github/actions/workflow/status/AhooraZen/dscan/ci.yml?style=flat-square&branch=main" alt="CI Status"></a>
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg?style=flat-square" alt="License"></a>
 </p>
 
 ---
 
-<!-- Demo Preview Section: Replace placeholders when images/videos are added -->
 <p align="center">
-  <img src="https://raw.githubusercontent.com/AhooraZen/dscan/main/assets/demo-cli.svg" alt="dscan CLI Terminal Demo" width="850" onerror="this.style.display='none'"/>
+  <img src="https://raw.githubusercontent.com/AhooraZen/dscan/main/assets/demo-cli.svg" alt="dscan CLI Terminal Demo" width="900"/>
 </p>
 
 <div align="center">
 
-| Mode | Target | Platform | Binary Size | Dependencies |
+| Mode | Interface | Target OS | Binary Size | Dependencies |
 | :--- | :--- | :--- | :--- | :--- |
-| **CLI** | Terminal | Linux (x86_64, aarch64), Windows x64 | ~450 KB | **Zero (pure stdlib + OS ABI)** |
-| **GUI** | Cushion Treemap | Windows x64, Linux x64, Android APK | ~1.8 MB | Tauri v2 + Canvas2D |
+| **CLI** | Terminal | Linux (x86_64, aarch64), Windows x64 | ~450 KB | **Zero (pure stdlib + OS kernel ABI)** |
+| **GUI** | Cushion Treemap | Linux x64, Windows x64 | ~35 MB | **Pure Rust (`gpui-kit` / Zed engine, WGPU)** |
 
 </div>
 
 ---
 
-## Why I wrote dscan
+## Why dscan?
 
 Most disk usage tools are either slow or bloated.
 
-Traditional tools like GNU `du` and `ncdu` rely on libc's `readdir()` and issue an individual `lstat` syscall for every file they discover. On modern NVMe SSDs or mobile UFS flash with millions of small files, path resolution, permission checks, and page cache locks kill throughput. 
+Traditional tools like GNU `du` and `ncdu` rely on libc's `readdir()` and issue an individual `lstat` syscall for every file they discover. On modern NVMe SSDs with millions of small files, path resolution, permission checks, and page cache locks degrade traversal throughput.
 
-Modern Rust rewrites (`dust`, `diskonaut`) improve multi-threading, but they pull in 40+ third-party crates, take 45 seconds to compile, and allocate heap strings for every directory entry.
+Modern Rust tools improve multi-threading, but often pull in dozens of third-party crates, take minutes to compile, and allocate heap strings for every directory entry.
 
-`dscan` takes a different route:
+`dscan` takes a direct, low-overhead approach:
 
-1. **Linux**: Calls `getdents64` directly with 512 KiB page-aligned buffers to slurp thousands of directory entries per syscall. Combines with `statx` using `AT_STATX_DONT_SYNC` and kernel-enforced `openat2(RESOLVE_NO_XDEV)` to never cross mount boundaries.
-2. **Windows**: Bypasses `FindFirstFileW`/`FindNextFileW` by querying `GetFileInformationByHandleEx` with `FileIdBothDirectoryInfo`. Reads actual cluster `AllocationSize` directly from the directory records in batch without secondary stat calls.
-3. **Android (Termux & APK)**: Automatically accounts for big.LITTLE core asymmetry. Disables hard CPU pinning so the kernel's CFS/EAS scheduler runs threads on high-performance Cortex cores instead of trapping the scanner on slow efficiency cores.
-4. **Lock-Free Concurrency**: Each worker runs on an atomic Chase-Lev work-stealing circular deque. Workers push and pop tasks in LIFO order with zero lock contention, while idle workers steal tasks in FIFO batches.
-5. **Zero-Allocation Arena**: Instead of allocating a `PathBuf` or `String` for every file, directory trees live in a chunked bump-allocated arena (`DirArena`) using 32-bit parent-child offsets.
-6. **Zero Dependencies (CLI)**: Compiles in under 4 seconds from a 7.8 KB crate download. No `clap`, no `rayon`, no `nix`, no `libc`.
+1. **Linux**: Calls raw `getdents64` directly with page-aligned buffers to retrieve directory records in bulk without libc `readdir` wrapper overhead. Combines with `statx` (`AT_STATX_DONT_SYNC`, `STATX_BLOCKS`) and `openat2(RESOLVE_NO_XDEV)` to respect filesystem mount boundaries.
+2. **Windows**: Bypasses slow `FindFirstFileW`/`FindNextFileW` by querying `NtQueryDirectoryFileEx` with `FileIdBothDirectoryInfo`. Reads cluster `AllocationSize` directly from directory records in batch without secondary stat calls.
+3. **Lock-Free Concurrency**: Each worker thread operates on an atomic Chase-Lev work-stealing circular deque. Workers push and pop tasks in LIFO order with zero lock contention, while idle workers steal tasks in FIFO batches.
+4. **Zero-Allocation Bump Arena**: Instead of allocating a `PathBuf` or `String` per file, directory trees live in a chunked bump-allocated arena (`DirArena`) using 32-bit parent-child offsets.
+5. **Zero Dependencies (CLI)**: Compiles in seconds. No `clap`, no `rayon`, no `nix`, no `libc`.
 
 ---
 
@@ -54,45 +52,35 @@ Modern Rust rewrites (`dust`, `diskonaut`) improve multi-threading, but they pul
 | Feature | `du` | `ncdu` | `dust` | `WinDirStat` | `dscan` |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Multi-threaded Work Stealing** | No | No | Rayon | No | **Chase-Lev Deques** |
-| **Bulk Kernel Syscalls** | No (`readdir`) | No (`readdir`) | No (`std::fs`) | No (`Win32`) | **`getdents64` / `FileIdBoth`** |
-| **Filesystem Block Allocation** | Yes | Yes | Yes | Sparse buggy | **Exact (`stx_blocks * 512`)** |
-| **External Dependencies** | Libc | Ncurses | 42 crates | C++ MFC | **Zero (CLI)** |
-| **Compile Time** | ~10s (C) | ~15s (C) | ~45s (Rust) | N/A | **~3.5s (Rust)** |
-| **Binary Size** | ~140 KB | ~190 KB | ~4.5 MB | ~2.5 MB | **~450 KB** |
-| **Android Termux Native** | Slow | Slow | Medium | No | **47,000 files/sec** |
-| **Interactive Cushion Treemap** | No | No | No | CPU GDI | **Tauri v2 + Canvas2D** |
+| **Bulk Kernel Syscalls** | No (`readdir`) | No (`readdir`) | No (`std::fs`) | No (`Win32`) | **`getdents64` / `NtQueryDirectoryFile`** |
+| **Filesystem Block Allocation** | Yes | Yes | Yes | Sparse buggy | **Exact (`stx_blocks * 512` / `AllocationSize`)** |
+| **CLI Dependencies** | Libc | Ncurses | 40+ crates | C++ MFC | **Zero (Pure stdlib)** |
+| **Machine-Readable Output** | Text | Export | Text | None | **`--json` (RFC 8259)** |
+| **Extension Breakdown** | No | No | No | Extension list | **`--ext` table** |
+| **Interactive Cushion Treemap** | No | No | No | CPU GDI | **GPUI-Kit (120 FPS GPU)** |
+| **Native Safe Trash & Reveal** | No | Delete | Delete | Explorer | **`trash` integration + safety guard** |
 
 ---
 
-## Real-world benchmarks
+## Visual Desktop GUI (`dscan-gui`)
 
-### Android Smartphone (Octa-core Snapdragon, UFS storage, Termux)
+`dscan-gui` is a pure-Rust desktop visualizer built with [gpui-kit](https://gpui-kit.com) (Zed Industries' GPU-accelerated engine). It runs without WebKit, node_modules, or webviews.
 
-Scanning full `/data/data/com.termux/files` (**616,855 files**, 22.0 GiB):
+<p align="center">
+  <img src="https://raw.githubusercontent.com/AhooraZen/dscan/main/assets/demo-gui.svg" alt="dscan Cushion Treemap GUI Preview" width="950"/>
+</p>
 
-```
-Target: /data/data/com.termux/files  |  Threads: 16  |  Exclusions: 6 patterns
-
-╭─ Scan Complete ──────────────────────────────────────────────────────────────╮
-│   ✔ 13.10s   │   Total: 22.00 GiB   │   Files: 616,855                       │
-╰──────────────────────────────────────────────────────────────────────────────╯
-CPU utilization: 437%  |  Throughput: ~47,000 files/sec
-```
-
-### Linux Workstation (AMD Ryzen 9 7950X, Samsung 990 Pro NVMe)
-
-Scanning Linux root directory (**1,420,000 files**, 410 GiB):
-
-- `du -sh /`: 18.42s
-- `ncdu /`: 14.15s
-- `dust /`: 5.82s
-- **`dscan /`**: **1.94s**
+- **GPU Cushion Treemap**: Faithful implementation of Jarke J. van Wijk's cushion shading algorithm ($I = I_a + I_d \max(0, \mathbf{N} \cdot \mathbf{L})$). Nested directory hierarchies render with smooth rounded ridges at 120 FPS.
+- **Native File Actions**: Right-click any cushion tile or directory row to **Reveal in File Manager** (Linux D-Bus/xdg-open, Windows Explorer `/select,`, macOS `open -R`).
+- **Safe Move to Trash**: Integrated with system recycle bins via `trash` crate, backed by `is_safe_to_trash` guards to prevent accidental deletion of system roots or critical directories.
+- **In-Memory Subtree Pruning**: Trashed or deleted directories bubble size deductions up to parent nodes instantly without requiring a full filesystem rescan.
+- **System Resource Monitor**: Live CPU and RAM usage tracking directly in the header bar.
 
 ---
 
 ## Installation
 
-### From crates.io (Recommended for CLI)
+### From crates.io (CLI)
 
 ```bash
 cargo install dscan
@@ -100,36 +88,32 @@ cargo install dscan
 
 ### Pre-built binaries (GitHub Releases)
 
-Download pre-compiled binaries from the [Releases page](https://github.com/AhooraZen/dscan/releases/latest):
+Download pre-compiled binaries from [GitHub Releases](https://github.com/AhooraZen/dscan/releases/latest):
 
-- **Linux x86_64**: `dscan-linux-x86_64.tar.gz`
-- **Linux aarch64**: `dscan-linux-aarch64.tar.gz`
-- **Windows x64**: `dscan-windows-x64.zip`
-- **Desktop GUI (Linux x64)**: `dscan-gui-linux-x86_64.tar.gz`
-- **Desktop GUI (Windows x64)**: `dscan-gui-windows-x64.zip`
-- **Android APK**: `dscan-gui-android-arm64-v8a.apk` / `dscan-gui-android-armeabi-v7a.apk`
-
-### Arch Linux
-
-```bash
-cargo install dscan
-```
+- **Linux x86_64 CLI**: `dscan-linux-x86_64.tar.gz`
+- **Linux aarch64 CLI**: `dscan-linux-aarch64.tar.gz`
+- **Windows x64 CLI**: `dscan-windows-x64.zip`
+- **Linux Desktop GUI**: `dscan-gui-linux-x86_64.tar.gz`
+- **Windows Desktop GUI**: `dscan-gui-windows-x64.zip`
 
 ### Build from source
 
 ```bash
 git clone https://github.com/AhooraZen/dscan.git
 cd dscan
-cargo build --release -p dscan
-```
 
-The compiled binary will be at `target/release/dscan` (or `dscan.exe` on Windows).
+# Build CLI binary
+cargo build --release -p dscan
+
+# Build or run Desktop GUI
+cargo run --release -p dscan-gui
+```
 
 ---
 
 ## Usage
 
-### Quick scan
+### CLI Quick Scan
 
 ```bash
 # Scan current directory
@@ -138,14 +122,14 @@ dscan .
 # Scan specific folder, show top 20 largest directories
 dscan /home/user --top 20
 
-# Scan root filesystem, skipping docker and cache folders
-sudo dscan / --exclude /var/lib/docker --exclude ~/.cache
+# Show extension usage breakdown table
+dscan /data --ext
 
-# Use 16 parallel worker threads
-dscan /data -j 16
+# Output machine-readable JSON (RFC 8259)
+dscan /data --json > scan.json
 
-# Follow symlinks (e.g. Android Termux ~/storage)
-dscan ~ -L -x
+# Scan with 16 worker threads, skipping specific directories
+dscan / --threads 16 --exclude /proc --exclude /sys --exclude ~/.cache
 ```
 
 ### Command-line options
@@ -155,37 +139,14 @@ dscan ~ -L -x
 | `TARGET_PATH` | Path | Root path to scan | `.` (current directory) |
 | `--top` | `<N>` | Number of largest directories and files to display | `25` |
 | `--depth` | `<N>` | Maximum directory depth for recursive rollup | Unlimited |
-| `-j`, `--threads` | `<N>` | Number of concurrent worker threads | `2x cores` (4 to 64) |
+| `-j`, `--threads` | `<N>` | Number of concurrent worker threads | `2x cores` (1 to 64) |
 | `--exclude` | `<PATTERN>` | Path or folder name pattern to skip | System defaults (`/proc`, `/sys`, etc.) |
+| `--json` | None | Output machine-readable RFC 8259 JSON to stdout | Off |
+| `--ext` | None | Display top 10 file extensions breakdown table | Off |
 | `-L`, `--follow-symlinks` | None | Traverse directory symlinks | Off |
 | `-x`, `--cross-device` | None | Traverse across filesystem mount boundaries | Off |
 | `-V`, `--version` | None | Print version | |
 | `-h`, `--help` | None | Show help menu | |
-
----
-
-## Visual Desktop & Mobile GUI (`dscan-gui`)
-
-`dscan` includes an optional visual companion app built with Tauri v2.
-
-<!-- GUI Screenshot placeholder -->
-<p align="center">
-  <img src="https://raw.githubusercontent.com/AhooraZen/dscan/main/assets/demo-gui.png" alt="dscan Cushion Treemap GUI Preview" width="900" onerror="this.style.display='none'"/>
-</p>
-
-- **Quadratic Cushion Treemap**: Faithful implementation of Jarke J. van Wijk's cushion shading algorithm ($I = I_a + I_d \max(0, \mathbf{N} \cdot \mathbf{L})$). Nested directory hierarchies render with smooth rounded visual ridges on HTML5 Canvas2D.
-- **Lock-Free State Sampling**: The GUI polls atomics every 100ms from the Rust backend, preventing DOM freeze while scanning millions of entries.
-- **Interactive File Explorer**: Zoom into subdirectories, click any cushion block to reveal file details, and open directly in your native file manager.
-
-To run the GUI from source:
-
-```bash
-cd crates/dscan-gui/ui
-bun install
-bun run build
-cd ../../..
-cargo run --release -p dscan-gui
-```
 
 ---
 
@@ -194,12 +155,16 @@ cargo run --release -p dscan-gui
 ```
 dscan/
 ├── crates/
-│   ├── dscan-core/       # Kernel traversal engine, work-stealing, arena rollup
+│   ├── dscan-core/       # Kernel traversal engine, Chase-Lev work-stealing, arena rollup
 │   │   ├── src/sys/      # Raw Linux getdents64, statx, io_uring, openat2 & Windows NT ABI
 │   │   ├── src/arena.rs  # Zero-allocation bump directory arena
+│   │   ├── src/scanner.rs # Work-stealing traversal coordinator
 │   │   └── src/work_stealing.rs # Chase-Lev lock-free task deques
-│   ├── dscan-cli/        # Neon ANSI terminal UI, zero dependencies
-│   └── dscan-gui/        # Tauri v2 desktop & mobile cushion treemap companion
+│   ├── dscan-cli/        # Neon ANSI terminal UI, JSON serializer, zero dependencies
+│   └── dscan-gui/        # Pure Rust GPUI-Kit desktop visualizer (Zed GPUI / WGPU)
+│       ├── src/views/    # Directory tree, cushion treemap, legend, status bar
+│       ├── src/treemap/  # Squarified layout and cushion shading algorithms
+│       └── src/system.rs # File reveal and safe trash operations
 ```
 
 ---

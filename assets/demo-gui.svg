@@ -1,0 +1,182 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" width="100%" height="100%">
+  <defs>
+    <style>
+      .bg { fill: #0b0f14; rx: 12px; }
+      .panel-bg { fill: #11161d; }
+      .titlebar { fill: #161c24; }
+      .border { stroke: #21262d; stroke-width: 1.5; }
+      .circle-red { fill: #ff5555; }
+      .circle-yellow { fill: #f1fa8c; }
+      .circle-green { fill: #50fa7b; }
+      .font { font-family: 'JetBrains Mono', 'Fira Code', 'Segoe UI', system-ui, sans-serif; font-size: 13px; }
+      .font-mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+      .cyan { fill: #00e5ff; }
+      .green { fill: #50fa7b; }
+      .yellow { fill: #f1fa8c; }
+      .purple { fill: #c084fc; }
+      .blue { fill: #60a5fa; }
+      .muted { fill: #8b949e; }
+      .white { fill: #f0f6fc; }
+    </style>
+    <!-- Cushion lighting gradients -->
+    <radialGradient id="cushion-rlib" cx="35%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="60%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#0369a1"/>
+    </radialGradient>
+    <radialGradient id="cushion-so" cx="35%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#c084fc"/>
+      <stop offset="60%" stop-color="#9333ea"/>
+      <stop offset="100%" stop-color="#6b21a8"/>
+    </radialGradient>
+    <radialGradient id="cushion-tar" cx="35%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="60%" stop-color="#d97706"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </radialGradient>
+    <radialGradient id="cushion-rs" cx="35%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="60%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </radialGradient>
+    <radialGradient id="cushion-bin" cx="35%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#fb7185"/>
+      <stop offset="60%" stop-color="#e11d48"/>
+      <stop offset="100%" stop-color="#9f1239"/>
+    </radialGradient>
+    <radialGradient id="cushion-misc" cx="35%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#94a3b8"/>
+      <stop offset="60%" stop-color="#475569"/>
+      <stop offset="100%" stop-color="#334155"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Window Frame -->
+  <rect width="1000" height="640" class="bg border"/>
+  <rect width="1000" height="42" class="titlebar" rx="12"/>
+  <rect y="30" width="1000" height="12" class="titlebar"/>
+
+  <!-- Window Controls -->
+  <circle cx="24" cy="21" r="6" class="circle-red"/>
+  <circle cx="44" cy="21" r="6" class="circle-yellow"/>
+  <circle cx="64" cy="21" r="6" class="circle-green"/>
+
+  <!-- Title & App Badge -->
+  <text x="500" y="26" text-anchor="middle" fill="#f0f6fc" class="font" font-size="13" font-weight="bold">dscan-gui — Native GPUI-Kit Cushion Treemap Visualizer (Pure Rust • 120 FPS)</text>
+
+  <!-- Toolbar / Header Bar -->
+  <rect x="16" y="52" width="968" height="46" rx="8" fill="#131922" stroke="#21262d"/>
+
+  <!-- Path input -->
+  <rect x="28" y="60" width="530" height="30" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="40" y="80" fill="#8b949e" class="font-mono">Path: <tspan fill="#58a6ff">/home/ahoura/workspace/dscan</tspan></text>
+
+  <!-- Scan Button -->
+  <rect x="568" y="60" width="85" height="30" rx="6" fill="#238636"/>
+  <text x="610" y="80" text-anchor="middle" fill="#ffffff" class="font" font-weight="bold" font-size="12">▶ Scan</text>
+
+  <!-- Hardware Monitor Chips -->
+  <rect x="665" y="62" width="95" height="26" rx="13" fill="#1f2937" stroke="#374151"/>
+  <text x="712" y="79" text-anchor="middle" fill="#34d399" class="font-mono" font-size="11">CPU: 18%</text>
+
+  <rect x="768" y="62" width="105" height="26" rx="13" fill="#1f2937" stroke="#374151"/>
+  <text x="820" y="79" text-anchor="middle" fill="#60a5fa" class="font-mono" font-size="11">RAM: 48 MB</text>
+
+  <rect x="881" y="62" width="90" height="26" rx="13" fill="#1f2937" stroke="#374151"/>
+  <text x="926" y="79" text-anchor="middle" fill="#c084fc" class="font-mono" font-size="11">GPU: Active</text>
+
+  <!-- Main View Split -->
+  <!-- Left: Directory Tree View -->
+  <rect x="16" y="108" width="370" height="474" rx="8" class="panel-bg border"/>
+  <text x="32" y="134" fill="#f0f6fc" class="font" font-weight="bold">📁 Directory Hierarchy</text>
+  <line x1="16" y1="146" x2="386" y2="146" stroke="#21262d"/>
+
+  <!-- Tree Items -->
+  <g class="font-mono" transform="translate(28, 170)">
+    <text y="0" fill="#f0f6fc">▼ 📁 dscan</text><text x="330" y="0" text-anchor="end" fill="#50fa7b">48.25 GiB</text>
+
+    <text y="28" fill="#f0f6fc">  ▼ 📁 target</text><text x="330" y="28" text-anchor="end" fill="#50fa7b">24.10 GiB</text>
+
+    <text y="56" fill="#8b949e">    ▶ 📁 release</text><text x="330" y="56" text-anchor="end" fill="#8b949e">18.20 GiB</text>
+
+    <text y="84" fill="#8b949e">    ▶ 📁 debug</text><text x="330" y="84" text-anchor="end" fill="#8b949e">5.90 GiB</text>
+
+    <text y="112" fill="#8b949e">  ▶ 📁 build-artifacts</text><text x="330" y="112" text-anchor="end" fill="#8b949e">12.45 GiB</text>
+
+    <!-- Selected Node Row with Actions -->
+    <rect x="-6" y="126" width="350" height="36" rx="6" fill="#1f2d3d" stroke="#388bfd" stroke-width="1.2"/>
+    <text y="148" fill="#58a6ff" font-weight="bold">  ▼ 📁 node_modules</text>
+    <text x="210" y="148" fill="#50fa7b">5.80 GiB</text>
+
+    <!-- Quick action buttons -->
+    <rect x="252" y="132" width="44" height="22" rx="4" fill="#21262d" stroke="#30363d"/>
+    <text x="274" y="147" text-anchor="middle" fill="#58a6ff" font-size="10">Reveal</text>
+
+    <rect x="302" y="132" width="38" height="22" rx="4" fill="#441a1d" stroke="#da3633"/>
+    <text x="321" y="147" text-anchor="middle" fill="#f85149" font-size="10">Trash</text>
+
+    <text y="186" fill="#8b949e">  ▶ 📁 .git</text><text x="330" y="186" text-anchor="end" fill="#8b949e">3.12 GiB</text>
+    <text y="214" fill="#8b949e">  ▶ 📁 crates</text><text x="330" y="214" text-anchor="end" fill="#8b949e">2.78 GiB</text>
+    <text y="242" fill="#8b949e">    ▶ 📁 dscan-core</text><text x="330" y="242" text-anchor="end" fill="#8b949e">1.40 GiB</text>
+    <text y="270" fill="#8b949e">    ▶ 📁 dscan-gui</text><text x="330" y="270" text-anchor="end" fill="#8b949e">1.10 GiB</text>
+    <text y="298" fill="#8b949e">    ▶ 📁 dscan-cli</text><text x="330" y="298" text-anchor="end" fill="#8b949e">280 MiB</text>
+    <text y="326" fill="#8b949e">  ▶ 📁 assets</text><text x="330" y="326" text-anchor="end" fill="#8b949e">12 MiB</text>
+  </g>
+
+  <!-- Right: 120 FPS Cushion Treemap Canvas -->
+  <rect x="398" y="108" width="586" height="474" rx="8" class="panel-bg border"/>
+  <text x="414" y="134" fill="#f0f6fc" class="font" font-weight="bold">🔲 GPU Cushion Treemap (WinDirStat Van Wijk Shading)</text>
+  <line x1="398" y1="146" x2="984" y2="146" stroke="#21262d"/>
+
+  <!-- Cushion Treemap Nested Tiles -->
+  <g transform="translate(410, 156)">
+    <!-- Tile 1: target/release (.rlib) -->
+    <rect x="0" y="0" width="310" height="230" rx="8" fill="url(#cushion-rlib)" stroke="#1e293b" stroke-width="2"/>
+    <text x="14" y="28" fill="#ffffff" class="font-mono" font-weight="bold">target/release/*.rlib</text>
+    <text x="14" y="48" fill="#e0f2fe" class="font-mono" font-size="11">18.20 GiB (37.7%)</text>
+
+    <!-- Tile 2: build-artifacts (.so) -->
+    <rect x="318" y="0" width="246" height="150" rx="8" fill="url(#cushion-so)" stroke="#1e293b" stroke-width="2"/>
+    <text x="330" y="28" fill="#ffffff" class="font-mono" font-weight="bold">build/*.so</text>
+    <text x="330" y="48" fill="#f3e8ff" class="font-mono" font-size="11">10.45 GiB (21.7%)</text>
+
+    <!-- Tile 3: archives (.tar.gz) -->
+    <rect x="318" y="158" width="246" height="152" rx="8" fill="url(#cushion-tar)" stroke="#1e293b" stroke-width="2"/>
+    <text x="330" y="186" fill="#ffffff" class="font-mono" font-weight="bold">dist/*.tar.gz</text>
+    <text x="330" y="206" fill="#fef3c7" class="font-mono" font-size="11">8.15 GiB (16.9%)</text>
+
+    <!-- Tile 4: node_modules -->
+    <rect x="0" y="238" width="210" height="172" rx="8" fill="url(#cushion-rs)" stroke="#388bfd" stroke-width="2.5"/>
+    <text x="14" y="266" fill="#ffffff" class="font-mono" font-weight="bold">node_modules/*</text>
+    <text x="14" y="286" fill="#d1fae5" class="font-mono" font-size="11">5.80 GiB (12.0%)</text>
+
+    <!-- Tile 5: .git -->
+    <rect x="218" y="238" width="92" height="172" rx="6" fill="url(#cushion-bin)" stroke="#1e293b" stroke-width="1.5"/>
+    <text x="226" y="266" fill="#ffffff" class="font-mono" font-size="11">.git/pack</text>
+    <text x="226" y="284" fill="#ffe4e6" class="font-mono" font-size="10">3.12 GiB</text>
+
+    <!-- Tile 6: crates source -->
+    <rect x="318" y="318" width="138" height="92" rx="6" fill="url(#cushion-misc)" stroke="#1e293b" stroke-width="1.5"/>
+    <text x="328" y="342" fill="#ffffff" class="font-mono" font-size="11">crates/**/*.rs</text>
+    <text x="328" y="360" fill="#cbd5e1" class="font-mono" font-size="10">2.78 GiB</text>
+
+    <!-- Tile 7: assets -->
+    <rect x="464" y="318" width="100" height="92" rx="6" fill="url(#cushion-so)" stroke="#1e293b" stroke-width="1.5"/>
+    <text x="474" y="342" fill="#ffffff" class="font-mono" font-size="11">assets/*</text>
+    <text x="474" y="360" fill="#f3e8ff" class="font-mono" font-size="10">12 MiB</text>
+  </g>
+
+  <!-- Bottom Status Bar -->
+  <rect x="16" y="590" width="968" height="36" rx="6" fill="#131922" stroke="#21262d"/>
+  <text x="32" y="613" fill="#8b949e" class="font-mono" font-size="12">
+    Scanned <tspan fill="#f0f6fc">284,912</tspan> files in <tspan fill="#50fa7b">0.84s</tspan> • Safe Trash Protection Enabled • Pure Rust GPUI
+  </text>
+
+  <!-- Legend in Status Bar -->
+  <g class="font-mono" font-size="11" transform="translate(560, 613)">
+    <circle cx="0" cy="-4" r="5" fill="#38bdf8"/><text x="10" y="0" fill="#cbd5e1">.rlib (37.7%)</text>
+    <circle cx="110" cy="-4" r="5" fill="#c084fc"/><text x="120" y="0" fill="#cbd5e1">.so (21.7%)</text>
+    <circle cx="210" cy="-4" r="5" fill="#fbbf24"/><text x="220" y="0" fill="#cbd5e1">.tar.gz (16.9%)</text>
+    <circle cx="320" cy="-4" r="5" fill="#34d399"/><text x="330" y="0" fill="#cbd5e1">.rs (8.9%)</text>
+  </g>
+</svg>

@@ -1,13 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 480" width="100%" height="100%">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 540" width="100%" height="100%">
   <defs>
     <style>
-      .bg { fill: #0d1117; rx: 12px; }
-      .titlebar { fill: #161b22; }
+      .bg { fill: #0b0f14; rx: 12px; }
+      .titlebar { fill: #131920; }
       .circle-red { fill: #ff5555; }
       .circle-yellow { fill: #f1fa8c; }
       .circle-green { fill: #50fa7b; }
       .font { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 13px; }
-      .cyan { fill: #44d2ff; font-weight: bold; }
+      .cyan { fill: #00e5ff; font-weight: bold; }
       .green { fill: #50fa7b; font-weight: bold; }
       .yellow { fill: #f1fa8c; }
       .purple { fill: #bd93f9; font-weight: bold; }
@@ -15,45 +15,48 @@
       .muted { fill: #6272a4; }
       .white { fill: #f8f8f2; }
       .bar-green { fill: #50fa7b; }
-      .bar-bg { fill: #282a36; }
+      .bar-bg { fill: #1f2430; }
+      .border { stroke: #21262d; stroke-width: 1.5; }
     </style>
   </defs>
 
-  <rect width="900" height="480" class="bg" stroke="#30363d" stroke-width="2"/>
-  <rect width="900" height="38" class="titlebar" rx="12"/>
-  <rect y="26" width="900" height="12" class="titlebar"/>
+  <rect width="920" height="540" class="bg border"/>
+  <rect width="920" height="38" class="titlebar" rx="12"/>
+  <rect y="26" width="920" height="12" class="titlebar"/>
   <circle cx="24" cy="19" r="6" class="circle-red"/>
   <circle cx="44" cy="19" r="6" class="circle-yellow"/>
   <circle cx="64" cy="19" r="6" class="circle-green"/>
-  <text x="450" y="24" text-anchor="middle" fill="#8b949e" class="font" font-size="12">dscan — termux@android (Snapdragon 8-core)</text>
+  <text x="460" y="24" text-anchor="middle" fill="#8b949e" class="font" font-size="12">dscan — Linux / Windows Terminal</text>
 
   <g transform="translate(30, 65)" class="font">
     <!-- Header Box -->
     <text x="0" y="0" class="cyan">╭─ <tspan class="green">⚡ DSCAN — Ultra-Fast Disk Space Analyzer</tspan> ──────────────────────────────────────────╮</text>
     <text x="0" y="20" class="cyan">╰────────────────────────────────────────────────────────────────────────────────────────╯</text>
-    <text x="14" y="44" class="blue">Target: <tspan class="cyan">/data/data/com.termux/files</tspan>   |   <tspan class="blue">Threads:</tspan> <tspan class="green">16</tspan>   |   <tspan class="blue">Exclusions:</tspan> <tspan class="muted">6 patterns</tspan></text>
+    <text x="14" y="44" class="blue">Target: <tspan class="cyan">/home/user/workspace</tspan>   |   <tspan class="blue">Threads:</tspan> <tspan class="green">16</tspan>   |   <tspan class="blue">Mode:</tspan> <tspan class="green">Lock-Free Work Stealing</tspan></text>
 
     <!-- Scan Complete Box -->
     <text x="0" y="80" class="green">╭─ Scan Complete ────────────────────────────────────────────────────────────────────────╮</text>
-    <text x="0" y="104" class="green">│   <tspan class="cyan">✔</tspan> <tspan class="yellow">13.10s</tspan>   <tspan class="cyan">│</tspan>   Total: <tspan class="yellow">22.00 GiB</tspan>   <tspan class="cyan">│</tspan>   Files: <tspan class="yellow">616,855</tspan>   <tspan class="muted">(47,088 files/sec, 437% CPU)</tspan> <tspan class="green">│</tspan></text>
+    <text x="0" y="104" class="green">│   <tspan class="cyan">✔</tspan> <tspan class="yellow">0.84s</tspan>   <tspan class="cyan">│</tspan>   Total: <tspan class="yellow">48.25 GiB</tspan>   <tspan class="cyan">│</tspan>   Files: <tspan class="yellow">284,912</tspan>   <tspan class="muted">(Direct Kernel Syscalls)</tspan>      <tspan class="green">│</tspan></text>
     <text x="0" y="128" class="green">╰────────────────────────────────────────────────────────────────────────────────────────╯</text>
 
     <!-- Top Directories -->
     <text x="0" y="162" class="cyan">📁 Top Directories By Recursive Size:</text>
     <text x="0" y="178" class="muted">────────────────────────────────────────────────────────────────────────────────────────</text>
 
-    <text x="0" y="200"><tspan class="green">  22.00 GiB </tspan><tspan class="bar-green">████████████████</tspan> <tspan class="cyan">/data/data/com.termux/files</tspan></text>
-    <text x="0" y="222"><tspan class="green">  15.67 GiB </tspan><tspan class="bar-green">███████████</tspan><tspan class="bar-bg">░░░░░</tspan> <tspan class="cyan">/data/data/com.termux/files/home</tspan></text>
-    <text x="0" y="244"><tspan class="green">   6.34 GiB </tspan><tspan class="bar-green">█████</tspan><tspan class="bar-bg">░░░░░░░░░░░</tspan> <tspan class="cyan">/data/data/com.termux/files/usr</tspan></text>
-    <text x="0" y="266"><tspan class="green">   4.47 GiB </tspan><tspan class="bar-green">███</tspan><tspan class="bar-bg">░░░░░░░░░░░░░</tspan> <tspan class="cyan">/data/data/com.termux/files/home/.bun</tspan></text>
-    <text x="0" y="288"><tspan class="green">   3.37 GiB </tspan><tspan class="bar-green">██</tspan><tspan class="bar-bg">░░░░░░░░░░░░░░</tspan> <tspan class="cyan">/data/data/com.termux/files/usr/lib</tspan></text>
+    <text x="0" y="200"><tspan class="green">  24.10 GiB </tspan><tspan class="bar-green">████████████████</tspan> <tspan class="cyan">/home/user/workspace/target</tspan></text>
+    <text x="0" y="222"><tspan class="green">  12.45 GiB </tspan><tspan class="bar-green">████████</tspan><tspan class="bar-bg">░░░░░░░░</tspan> <tspan class="cyan">/home/user/workspace/build-artifacts</tspan></text>
+    <text x="0" y="244"><tspan class="green">   5.80 GiB </tspan><tspan class="bar-green">████</tspan><tspan class="bar-bg">░░░░░░░░░░░░</tspan> <tspan class="cyan">/home/user/workspace/node_modules</tspan></text>
+    <text x="0" y="266"><tspan class="green">   3.12 GiB </tspan><tspan class="bar-green">██</tspan><tspan class="bar-bg">░░░░░░░░░░░░░░</tspan> <tspan class="cyan">/home/user/workspace/.git</tspan></text>
+    <text x="0" y="288"><tspan class="green">   2.78 GiB </tspan><tspan class="bar-green">██</tspan><tspan class="bar-bg">░░░░░░░░░░░░░░</tspan> <tspan class="cyan">/home/user/workspace/assets</tspan></text>
 
-    <!-- Top Files -->
-    <text x="0" y="324" class="purple">📄 Top Largest Files:</text>
+    <!-- Top Extensions Breakdown Table (--ext) -->
+    <text x="0" y="324" class="purple">📊 Top Extensions by Disk Usage (--ext):</text>
     <text x="0" y="340" class="muted">────────────────────────────────────────────────────────────────────────────────────────</text>
 
-    <text x="0" y="362"><tspan class="yellow"> 294.50 MiB </tspan><tspan class="bar-green">████████████████</tspan> <tspan class="purple">.../claude-code-linux-arm64/claude</tspan></text>
-    <text x="0" y="384"><tspan class="yellow"> 245.51 MiB </tspan><tspan class="bar-green">█████████████</tspan><tspan class="bar-bg">░░░</tspan> <tspan class="purple">/data/data/com.termux/files/usr/lib/chromium/chrome</tspan></text>
-    <text x="0" y="406"><tspan class="yellow"> 211.95 MiB </tspan><tspan class="bar-green">███████████</tspan><tspan class="bar-bg">░░░░░</tspan> <tspan class="purple">/data/data/com.termux/files/usr/bin/codex</tspan></text>
+    <text x="0" y="362"><tspan class="yellow">  .rlib     </tspan><tspan class="green"> 18.20 GiB </tspan><tspan class="muted">(37.7%)</tspan>  <tspan class="blue">1,420 files</tspan>  <tspan class="bar-green">██████████████</tspan><tspan class="bar-bg">░░░░░░░░░░</tspan></text>
+    <text x="0" y="384"><tspan class="yellow">  .so       </tspan><tspan class="green"> 10.45 GiB </tspan><tspan class="muted">(21.7%)</tspan>  <tspan class="blue">  312 files</tspan>  <tspan class="bar-green">████████</tspan><tspan class="bar-bg">░░░░░░░░░░░░░░░░</tspan></text>
+    <text x="0" y="406"><tspan class="yellow">  .tar.gz   </tspan><tspan class="green">  8.15 GiB </tspan><tspan class="muted">(16.9%)</tspan>  <tspan class="blue">   45 files</tspan>  <tspan class="bar-green">██████</tspan><tspan class="bar-bg">░░░░░░░░░░░░░░░░░░</tspan></text>
+    <text x="0" y="428"><tspan class="yellow">  .rs       </tspan><tspan class="green">  4.30 GiB </tspan><tspan class="muted">( 8.9%)</tspan>  <tspan class="blue">8,950 files</tspan>  <tspan class="bar-green">███</tspan><tspan class="bar-bg">░░░░░░░░░░░░░░░░░░░░░</tspan></text>
+    <text x="0" y="450"><tspan class="yellow">  .bin      </tspan><tspan class="green">  2.85 GiB </tspan><tspan class="muted">( 5.9%)</tspan>  <tspan class="blue">   18 files</tspan>  <tspan class="bar-green">██</tspan><tspan class="bar-bg">░░░░░░░░░░░░░░░░░░░░░░</tspan></text>
   </g>
 </svg>
