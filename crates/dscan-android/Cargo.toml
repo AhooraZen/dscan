@@ -1,6 +1,6 @@
 [package]
 name = "dscan-android"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2024"
 authors = ["AhooraZen <ahoora935137@gmail.com>"]
 description = "Native Android JNI bridge for dscan disk space analyzer"
@@ -11,5 +11,5 @@ name = "dscan"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-dscan-core = { version = "0.4.3", path = "../dscan-core" }
+dscan-core = { version = "0.4.4", path = "../dscan-core" }
 jni = { version = "0.21", default-features = false }
