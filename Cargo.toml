@@ -4,6 +4,7 @@ members = [
     "crates/dscan-core",
     "crates/dscan-cli",
     "crates/dscan-gui",
+    "crates/dscan-android",
 ]
 default-members = [
     "crates/dscan-core",

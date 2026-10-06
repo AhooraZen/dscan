@@ -171,9 +171,55 @@ jobs:
             dscan-gui-windows-x64.zip
             dscan-gui-windows-x64.zip.sha256
 
+  build-android:
+    name: Build Android APK (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Rust JNI cdylib (arm64-v8a)
+        run: |
+          cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build --release -p dscan-android
+
+      - name: Build Android Release APK
+        run: |
+          cd android
+          gradle assembleRelease
+
+      - name: Package Android Artifact
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk dscan-android-arm64.apk
+          sha256sum dscan-android-arm64.apk > dscan-android-arm64.apk.sha256
+
+      - name: Upload Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dscan-android-arm64.apk
+          path: |
+            dscan-android-arm64.apk
+            dscan-android-arm64.apk.sha256
+
   publish-github-release:
     name: Publish GitHub Release
-    needs: [build-cli, build-gui-linux, build-gui-windows]
+    needs: [build-cli, build-gui-linux, build-gui-windows, build-android]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -187,7 +233,7 @@ jobs:
       - name: Assemble Release Assets and Checksums
         run: |
           mkdir -p dist-release
-          find release-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} dist-release/ \;
+          find release-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.apk" \) -exec cp {} dist-release/ \;
           find release-artifacts -type f -name "*.sha256" -exec cat {} + > dist-release/SHA256SUMS.txt
           cat dist-release/SHA256SUMS.txt
 

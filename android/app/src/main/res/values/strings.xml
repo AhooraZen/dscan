@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">dscan</string>
+    <string name="scan_button">Start Scan</string>
+    <string name="cancel_button">Cancel</string>
+    <string name="permission_title">All Files Access Required</string>
+    <string name="permission_desc">dscan needs access to your device storage to analyze disk usage and display the cushion treemap.</string>
+    <string name="grant_permission">Grant Permission</string>
+</resources>
