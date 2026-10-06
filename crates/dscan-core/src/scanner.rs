@@ -74,13 +74,30 @@ impl Default for ScanOptions {
 
 impl ScanOptions {
     /// Dynamically determine optimal worker thread count based on hardware and underlying storage media.
-    /// - Rotational HDD / VPS: clamp to `1..=4` cores to prevent head-seeking I/O thrashing.
+    /// - Rotational HDD / VPS: clamp to `2..=4` threads to activate work-stealing while preventing head thrashing.
     /// - NVMe / SSD: scale to `4x cores` (clamped 8..=64) to saturate asynchronous queue depth.
     /// - Android: clamp to `2x cores` (clamped 4..=16) for thermal and battery preservation.
     pub fn auto_threads_for_path(path: &Path) -> usize {
+        #[cfg(unix)]
+        let cores = {
+            unsafe extern "C" {
+                fn sysconf(name: i32) -> i64;
+            }
+            let n = unsafe { sysconf(84) }; // _SC_NPROCESSORS_ONLN
+            let avail = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1);
+            if n > 0 {
+                (n as usize).max(avail)
+            } else {
+                avail
+            }
+        };
+        #[cfg(not(unix))]
         let cores = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(8);
+
         #[cfg(target_os = "android")]
         {
             (cores * 2).clamp(4, 16)
@@ -89,7 +106,7 @@ impl ScanOptions {
         {
             let dev = get_path_dev(path);
             if crate::sys::is_rotational(dev, path) {
-                cores.clamp(1, 4)
+                cores.clamp(2, 4)
             } else {
                 (cores * 4).clamp(8, 64)
             }
