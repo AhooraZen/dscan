@@ -45,7 +45,7 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                                 .rounded_sm()
                                 .bg(theme::BORDER_DARK)
                                 .text_color(theme::TEXT_MUTED)
-                                .child("v0.3.1"),
+                                .child(concat!("v", env!("CARGO_PKG_VERSION"))),
                         ),
                 )
                 .child(

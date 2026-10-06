@@ -44,9 +44,10 @@ pub struct DscanApp {
 
 impl DscanApp {
     pub fn new(_cx: &mut Context<Self>) -> Self {
-        let threads = std::thread::available_parallelism()
+        let cores = std::thread::available_parallelism()
             .map(|n| n.get())
-            .unwrap_or(4);
+            .unwrap_or(8);
+        let threads = (cores * 4).clamp(8, 64);
 
         Self {
             state: AppState::new(),

@@ -55,9 +55,13 @@ impl CliOptions {
         let mut json = false;
         let mut ext = false;
 
-        let default_threads = std::thread::available_parallelism()
-            .map(|n| (n.get() * 2).clamp(4, 64))
-            .unwrap_or(16);
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(8);
+        #[cfg(target_os = "android")]
+        let default_threads = (cores * 2).clamp(4, 16);
+        #[cfg(not(target_os = "android"))]
+        let default_threads = (cores * 4).clamp(8, 64);
         let mut threads = default_threads;
 
         let mut i = 1;
@@ -107,7 +111,7 @@ impl CliOptions {
                     println!("dscan {}", env!("CARGO_PKG_VERSION"));
                     return None;
                 }
-                "-h" | "--help" => {
+                "help" | "-h" | "--help" => {
                     print_banner();
                     println!("\x1b[1mUsage:\x1b[0m dscan [TARGET_PATH] [OPTIONS]");
                     println!("\n\x1b[38;2;68;210;255mOptions:\x1b[0m");
@@ -121,7 +125,7 @@ impl CliOptions {
                         "  --depth <N>           Max folder depth to display (default: unlimited, 0=all)"
                     );
                     println!(
-                        "  --threads, -j <N>     Number of parallel worker threads (default: cores, max 32)"
+                        "  --threads, -j <N>     Number of parallel worker threads (default: 4x cores, max 64)"
                     );
                     println!(
                         "  -L, --follow-symlinks Follow directory symlinks (e.g. Termux ~/storage)"

@@ -57,9 +57,13 @@ impl Default for ScanOptions {
             "hiberfil.sys".to_string(),
             "dumpstack.log.sys".to_string(),
         ];
-        let threads = std::thread::available_parallelism()
-            .map(|n| (n.get() * 2).clamp(4, 64))
-            .unwrap_or(16);
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(8);
+        #[cfg(target_os = "android")]
+        let threads = (cores * 2).clamp(4, 16);
+        #[cfg(not(target_os = "android"))]
+        let threads = (cores * 4).clamp(8, 64);
 
         Self {
             target_path: ".".to_string(),
