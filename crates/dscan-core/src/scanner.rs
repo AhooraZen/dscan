@@ -616,7 +616,7 @@ fn scan_directory_tree(
     }
 
     let mut local_dir_size: u64 = 0;
-    let mut sub_dirs: Vec<Vec<u8>> = Vec::new();
+    let mut sub_dirs: Vec<Vec<u8>> = Vec::with_capacity(16);
 
     let root_dev = state.config.root_dev;
     let matcher = &state.config.matcher;
@@ -697,6 +697,11 @@ fn scan_directory_tree(
                 pos += reclen;
 
                 if name_bytes == b"." || name_bytes == b".." {
+                    continue;
+                }
+
+                // Fast-path: bypass path_stack operations if relative rule matches (e.g. .git, target, node_modules)
+                if matcher.is_name_excluded(name_bytes) {
                     continue;
                 }
 
@@ -1261,7 +1266,7 @@ fn scan_directory_tree_windows(
     use crate::sys::windows::*;
 
     let mut local_dir_size: u64 = 0;
-    let mut sub_dirs_wide: Vec<Vec<u16>> = Vec::new();
+    let mut sub_dirs_wide: Vec<Vec<u16>> = Vec::with_capacity(16);
 
     let root_dev = state.config.root_dev;
     let matcher = &state.config.matcher;
@@ -1321,6 +1326,11 @@ fn scan_directory_tree_windows(
 
                 if !is_dot_or_dotdot_utf16(name_slice) {
                     transcode_utf16_to_utf8(name_slice, utf8_scratch);
+
+                    // Fast-path: bypass path_stack operations if relative rule matches (e.g. .git, target, node_modules)
+                    if matcher.is_name_excluded(utf8_scratch.as_slice()) {
+                        continue;
+                    }
 
                     let orig_path_len = path_stack.len();
                     if !path_stack.ends_with(b"\\") && !path_stack.ends_with(b"/") {
@@ -1485,7 +1495,7 @@ fn worker_loop(
 
     let mut local_arena = DirArena::new();
     let mut local_top_files = LocalTopFiles::new(state.config.top_limit);
-    let mut dual_buffer = DualBuffer::new(512 * 1024, 4096);
+    let mut dual_buffer = DualBuffer::new(128 * 1024, 4096);
     #[cfg(unix)]
     let mut path_stack = Vec::with_capacity(4096);
     #[cfg(windows)]

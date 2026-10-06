@@ -462,6 +462,25 @@ pub fn open_dir_at2(dirfd: i32, name: *const std::ffi::c_char, no_xdev: bool) ->
         return Err(ENOSYS);
     }
 
+    // Adaptive retry on EMFILE / ENFILE after yielding thread
+    if err == 24 /* EMFILE */ || err == 23
+    /* ENFILE */
+    {
+        std::thread::yield_now();
+        let ret_retry = unsafe {
+            syscall(
+                SYS_OPENAT2,
+                dirfd as i64,
+                name as i64,
+                &how as *const OpenHow as i64,
+                std::mem::size_of::<OpenHow>() as i64,
+            )
+        };
+        if ret_retry >= 0 {
+            return Ok(ret_retry as i32);
+        }
+    }
+
     // Unprivileged user fallback: retry without O_NOATIME if EPERM or EACCES
     if err == 1 /* EPERM */ || err == 13
     /* EACCES */

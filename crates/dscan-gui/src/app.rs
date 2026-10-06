@@ -44,13 +44,13 @@ pub struct DscanApp {
 
 impl DscanApp {
     pub fn new(_cx: &mut Context<Self>) -> Self {
-        let cores = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(8);
-        let threads = (cores * 4).clamp(8, 64);
+        let app_state = AppState::new();
+        let threads = dscan_core::ScanOptions::auto_threads_for_path(std::path::Path::new(
+            &app_state.target_path,
+        ));
 
         Self {
-            state: AppState::new(),
+            state: app_state,
             threads,
             pacman_phase: 0,
             context_menu: None,
@@ -60,11 +60,16 @@ impl DscanApp {
 
     pub fn select_drive(&mut self, idx: usize, cx: &mut Context<Self>) {
         self.state.select_drive(idx);
+        self.threads = dscan_core::ScanOptions::auto_threads_for_path(std::path::Path::new(
+            &self.state.target_path,
+        ));
         cx.notify();
     }
 
     pub fn start_scan(&mut self, cx: &mut Context<Self>) {
         let target = self.state.target_path.clone();
+        self.threads =
+            dscan_core::ScanOptions::auto_threads_for_path(std::path::Path::new(&target));
         if self.state.start_scan(&target, self.threads).is_ok() {
             cx.spawn(async move |this, cx| {
                 loop {

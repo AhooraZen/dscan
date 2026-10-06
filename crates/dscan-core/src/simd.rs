@@ -98,6 +98,22 @@ unsafe fn find_nul_neon(slice: &[u8]) -> usize {
     len
 }
 
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn has_avx2() -> bool {
+    static DETECTED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    let val = DETECTED.load(std::sync::atomic::Ordering::Relaxed);
+    if val != 0 {
+        return val == 2;
+    }
+    let is_detected = is_x86_feature_detected!("avx2");
+    DETECTED.store(
+        if is_detected { 2 } else { 1 },
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    is_detected
+}
+
 /// Finds the index of the first null byte (0) in the slice.
 /// Returns slice.len() if no null byte is found.
 #[inline]
@@ -108,14 +124,12 @@ pub fn find_nul(slice: &[u8]) -> usize {
 
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx2") {
+        if has_avx2() {
             // SAFETY: Checked runtime support for AVX2.
             return unsafe { find_nul_avx2(slice) };
         }
-        if is_x86_feature_detected!("sse2") {
-            // SAFETY: Checked runtime support for SSE2.
-            return unsafe { find_nul_sse2(slice) };
-        }
+        // SAFETY: SSE2 is baseline architecture guarantee on x86_64.
+        return unsafe { find_nul_sse2(slice) };
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -171,8 +185,10 @@ impl FastExclusionMatcher {
         }
     }
 
+    /// Fast-path check for whether a directory entry name is excluded by relative rules.
+    /// Operates purely on the dirent name slice without needing full path construction.
     #[inline(always)]
-    pub fn is_excluded(&self, path_bytes: &[u8], name_bytes: &[u8]) -> bool {
+    pub fn is_name_excluded(&self, name_bytes: &[u8]) -> bool {
         // Fast 4-byte check for .git
         if self.has_dot_git
             && name_bytes.len() == 4
@@ -189,6 +205,15 @@ impl FastExclusionMatcher {
                     return true;
                 }
             }
+        }
+
+        false
+    }
+
+    #[inline(always)]
+    pub fn is_excluded(&self, path_bytes: &[u8], name_bytes: &[u8]) -> bool {
+        if self.is_name_excluded(name_bytes) {
+            return true;
         }
 
         // Absolute path match
