@@ -20,11 +20,11 @@
 
 <div align="center">
 
-| Mode | Interface | Target OS | Binary Size | Dependencies |
+| Mode | Interface | Target OS | Binary size | Dependencies |
 | :--- | :--- | :--- | :--- | :--- |
-| **CLI** | Terminal | Linux (x86_64, aarch64), Windows x64 | ~450 KB | **Zero (pure stdlib + OS kernel ABI)** |
-| **GUI** | Cushion Treemap | Linux x64, Windows x64 | ~35 MB | **Pure Rust (`gpui-kit` / Zed engine, WGPU)** |
-| **Android** | Jetpack Compose | Android 8+ (ARM64) | ~8 MB | **Kotlin + Rust JNI (`libdscan.so`)** |
+| **CLI** | Terminal | Linux (x86_64, aarch64), Windows x64 | ~450 KB | Pure stdlib and OS kernel ABI |
+| **GUI** | Cushion treemap | Linux x64, Windows x64 | ~35 MB | Pure Rust (`gpui-kit` / Zed engine, WGPU) |
+| **Android** | Jetpack Compose | Android 8+ (ARM64) | ~8 MB | Kotlin and Rust JNI (`libdscan.so`) |
 
 </div>
 
@@ -32,20 +32,20 @@
 
 ## Why dscan?
 
-Most disk usage tools are either slow or bloated.
+Most disk usage tools are either slow or heavy.
 
-Traditional tools like GNU `du` and `ncdu` rely on libc's `readdir()` and issue an individual `lstat` syscall for every file they discover. On modern NVMe SSDs with millions of small files, path resolution, permission checks, and page cache locks degrade traversal throughput.
+GNU `du` and `ncdu` call libc `readdir()` and fire an `lstat` for every single file. On modern NVMe SSDs with millions of small files, path resolution, permission checks, and page cache locks slow traversal down to a crawl.
 
-Modern Rust tools improve multi-threading, but often pull in dozens of third-party crates, take minutes to compile, and allocate heap strings for every directory entry.
+Other Rust tools bring multi-threading, but drag in dozens of crates, take minutes to compile, and allocate heap strings for every directory entry.
 
-`dscan` takes a direct, low-overhead approach:
+`dscan` talks to the kernel directly:
 
-1. **Linux**: Calls raw `getdents64` directly with page-aligned buffers to retrieve directory records in bulk without libc `readdir` wrapper overhead. Combines with `statx` (`AT_STATX_DONT_SYNC`, `STATX_BLOCKS`) and `openat2(RESOLVE_NO_XDEV)` to respect filesystem mount boundaries.
-2. **Windows**: Bypasses slow `FindFirstFileW`/`FindNextFileW` by querying `NtQueryDirectoryFileEx` with `FileIdBothDirectoryInfo`. Reads cluster `AllocationSize` directly from directory records in batch without secondary stat calls.
-3. **Lock-Free Concurrency**: Each worker thread operates on an atomic Chase-Lev work-stealing circular deque. Workers push and pop tasks in LIFO order with zero lock contention, while idle workers steal tasks in FIFO batches.
-4. **Zero-Allocation Bump Arena**: Instead of allocating a `PathBuf` or `String` per file, directory trees live in a chunked bump-allocated arena (`DirArena`) using 32-bit parent-child offsets.
-5. **Adaptive Thread Scaling**: Automatically detects whether storage is rotational HDD or NVMe SSD via Linux sysfs (`queue/rotational`) or Windows `IOCTL_STORAGE_QUERY_PROPERTY`. Clamps worker threads to 2–4 on HDDs (preventing I/O seek thrashing, yielding 30–80× speedups) and scales to `cores × 4` on SSDs.
-6. **Zero Dependencies (CLI)**: Compiles in seconds. No `clap`, no `rayon`, no `nix`, no `libc`.
+1. **Linux**: Uses raw `getdents64` with page-aligned buffers to pull directory entries in bulk, skipping libc `readdir` wrappers entirely. Pairs with `statx` (`AT_STATX_DONT_SYNC`, `STATX_BLOCKS`) and `openat2(RESOLVE_NO_XDEV)` so it never walks off the current filesystem mount.
+2. **Windows**: Skips `FindFirstFileW`/`FindNextFileW` and calls `NtQueryDirectoryFileEx` with `FileIdBothDirectoryInfo`. Reads cluster `AllocationSize` right out of directory records without follow-up stat calls.
+3. **Lock-free concurrency**: Workers run on atomic Chase-Lev work-stealing circular deques. Threads push and pop tasks in LIFO order with no lock contention. Idle workers steal tasks in FIFO batches.
+4. **Zero-allocation bump arena**: No `PathBuf` or `String` allocations per file. Trees live in a chunked bump arena (`DirArena`) linked by 32-bit parent-child offsets.
+5. **Adaptive thread scaling**: Checks whether the target drive is a spinning disk or an SSD via Linux sysfs (`queue/rotational`) or Windows `IOCTL_STORAGE_QUERY_PROPERTY`. Clamps to 2-4 threads on HDDs to stop disk head thrashing (cutting scan time from over a minute to 1.2s on large trees), and opens up to `cores * 4` on SSDs.
+6. **Zero CLI dependencies**: Builds in seconds. No `clap`, no `rayon`, no `nix`, no `libc`.
 
 ---
 
@@ -53,49 +53,49 @@ Modern Rust tools improve multi-threading, but often pull in dozens of third-par
 
 | Feature | `du` | `ncdu` | `dust` | `WinDirStat` | `dscan` |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Multi-threaded Work Stealing** | No | No | Rayon | No | **Chase-Lev Deques** |
-| **Bulk Kernel Syscalls** | No (`readdir`) | No (`readdir`) | No (`std::fs`) | No (`Win32`) | **`getdents64` / `NtQueryDirectoryFile`** |
-| **Filesystem Block Allocation** | Yes | Yes | Yes | Sparse buggy | **Exact (`stx_blocks * 512` / `AllocationSize`)** |
-| **CLI Dependencies** | Libc | Ncurses | 40+ crates | C++ MFC | **Zero (Pure stdlib)** |
-| **Machine-Readable Output** | Text | Export | Text | None | **`--json` (RFC 8259)** |
-| **Extension Breakdown** | No | No | No | Extension list | **`--ext` table** |
-| **Interactive Cushion Treemap** | No | No | No | CPU GDI | **GPUI-Kit (120 FPS GPU)** |
-| **Native Safe Trash & Reveal** | No | Delete | Delete | Explorer | **`trash` integration + safety guard** |
-| **HDD/SSD Adaptive Threading** | No | No | No | No | **Auto-detect rotational media** |
-| **Android App** | No | No | No | No | **Jetpack Compose + Rust JNI** |
+| **Multi-threaded work stealing** | No | No | Rayon | No | **Chase-Lev deques** |
+| **Bulk kernel syscalls** | No (`readdir`) | No (`readdir`) | No (`std::fs`) | No (`Win32`) | **`getdents64` / `NtQueryDirectoryFile`** |
+| **Filesystem block allocation** | Yes | Yes | Yes | Buggy on sparse | **Exact (`stx_blocks * 512` / `AllocationSize`)** |
+| **CLI dependencies** | libc | ncurses | 40+ crates | C++ MFC | **Zero (pure stdlib)** |
+| **Machine-readable output** | Text | Export | Text | None | **`--json` (RFC 8259)** |
+| **Extension breakdown** | No | No | No | File list | **`--ext` table** |
+| **Interactive cushion treemap** | No | No | No | CPU GDI | **GPUI-Kit (120 FPS GPU)** |
+| **Safe trash and reveal** | No | Delete | Delete | Explorer | **`trash` crate with safety guards** |
+| **HDD/SSD adaptive threads** | No | No | No | No | **Auto-detects rotational media** |
+| **Android app** | No | No | No | No | **Jetpack Compose and Rust JNI** |
 
 ---
 
-## Visual Desktop GUI (`dscan-gui`)
+## Desktop GUI (`dscan-gui`)
 
-`dscan-gui` is a pure-Rust desktop visualizer built with [gpui-kit](https://gpui-kit.com) (Zed Industries' GPU-accelerated engine). It runs without WebKit, node_modules, or webviews.
+`dscan-gui` is a pure-Rust desktop visualizer built on [gpui-kit](https://gpui-kit.com) (Zed's GPU engine). No WebKit, no node_modules, no embedded browsers.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/AhooraZen/dscan/main/assets/demo-gui.svg" alt="dscan Cushion Treemap GUI Preview" width="950"/>
 </p>
 
-- **GPU Cushion Treemap**: Faithful implementation of Jarke J. van Wijk's cushion shading algorithm ($I = I_a + I_d \max(0, \mathbf{N} \cdot \mathbf{L})$). Nested directory hierarchies render with smooth rounded ridges at 120 FPS.
-- **Dark / Light Theme**: Rich deep navy dark theme with neon accents, and clean crisp light theme. Toggle from the title bar.
-- **Native File Actions**: Right-click any cushion tile or directory row to **Reveal in File Manager** (Linux D-Bus/xdg-open, Windows Explorer `/select,`, macOS `open -R`).
-- **Safe Move to Trash**: Integrated with system recycle bins via `trash` crate, backed by `is_safe_to_trash` guards to prevent accidental deletion of system roots or critical directories.
-- **In-Memory Subtree Pruning**: Trashed or deleted directories bubble size deductions up to parent nodes instantly without requiring a full filesystem rescan.
-- **System Resource Monitor**: Live CPU and RAM usage tracking directly in the header bar.
-- **Extension Color Legend**: File type → color mapping with vivid, distinguishable palette.
+- **GPU cushion treemap**: Implements van Wijk's cushion shading algorithm ($I = I_a + I_d \max(0, \mathbf{N} \cdot \mathbf{L})$). Nested folders show up as smooth rounded ridges at 120 FPS.
+- **Dark and light themes**: Deep navy dark theme and clean light theme. Switch directly from the title bar.
+- **Native file actions**: Right-click any tile or directory row to reveal in your system file manager (Linux D-Bus/xdg-open, Windows Explorer `/select,`, macOS `open -R`).
+- **Safe trash**: Moves files to the system recycle bin via the `trash` crate, with `is_safe_to_trash` guards to stop accidental deletion of root or system paths.
+- **In-memory subtree updates**: Trashed items subtract their size up the tree immediately, no rescan needed.
+- **System monitor**: Live CPU and RAM counters in the header bar.
+- **Extension legend**: Color-coded file type bar so you know what you are looking at.
 
 ---
 
-## Android App (`dscan-android`)
+## Android app (`dscan-android`)
 
-A native Android disk space analyzer powered by the same Rust engine via JNI. Built with Jetpack Compose and Material 3 (Material You).
+Android disk analyzer powered by the same Rust scanner through JNI, with a Jetpack Compose Material 3 interface.
 
-- **Rust JNI Engine**: The full `dscan-core` scanner compiled as `libdscan.so` (ARM64), delivering kernel-level `getdents64` + `statx` performance directly on Android.
-- **Animated Circular Gauge**: Real-time scanning progress with a 270° animated arc showing total bytes, files/sec, and file count.
-- **Squarified Treemap**: Bruls-Huizing-van Wijk algorithm for optimal rectangle aspect ratios. Tap any tile for details, with haptic feedback.
-- **Material You Dynamic Color**: On Android 12+, adapts to your system wallpaper colors. Falls back to a custom neon dark/light theme on older devices.
-- **Bottom Navigation**: Treemap | Directory Tree | File Types | Settings — with smooth animated transitions between tabs.
-- **Native Folder Picker**: Android Storage Access Framework (SAF) integration via a "Browse…" button, plus quick-access chips for `/sdcard`, `Downloads`, `DCIM`, `WhatsApp`, and `Android/data`.
-- **Settings Screen**: Thread count (Auto/2/4/8/16), treemap depth (2–8), treemap max nodes (500–5000), and theme mode (System/Light/Dark).
-- **File Type Color Legend**: Horizontal scrollable row of colored chips mapping extensions to treemap colors.
+- **Rust JNI engine**: `dscan-core` compiled as `libdscan.so` (ARM64). Runs `getdents64` and `statx` on Android kernel.
+- **Animated circular gauge**: Real-time progress ring with bytes scanned, files per second, and file count.
+- **Squarified treemap**: Bruls-Huizing-van Wijk algorithm for clean rectangular layouts instead of thin strips. Tap any tile for details, with haptic feedback.
+- **Material You**: On Android 12+, pulls accents from your system wallpaper. Falls back to dark/light palettes on Android 11 and older.
+- **Bottom navigation**: Treemap, Directory Tree, File Types, and Settings.
+- **Folder picker**: Storage Access Framework (SAF) folder selection through a Browse button, plus quick-access chips for common paths (`/sdcard`, `Downloads`, `DCIM`, `WhatsApp`, `Android/data`).
+- **Settings**: Adjust thread count (Auto/2/4/8/16), treemap depth (2-8), max nodes (500-5000), and theme mode.
+- **Extension legend**: Color strip mapping file types to treemap tiles.
 
 ---
 
@@ -109,7 +109,7 @@ cargo install dscan
 
 ### Pre-built binaries (GitHub Releases)
 
-Download pre-compiled binaries from [GitHub Releases](https://github.com/AhooraZen/dscan/releases/latest):
+Grab pre-compiled builds from [GitHub Releases](https://github.com/AhooraZen/dscan/releases/latest):
 
 - **Linux x86_64 CLI**: `dscan-linux-x86_64.tar.gz`
 - **Linux aarch64 CLI**: `dscan-linux-aarch64.tar.gz`
@@ -124,10 +124,10 @@ Download pre-compiled binaries from [GitHub Releases](https://github.com/AhooraZ
 git clone https://github.com/AhooraZen/dscan.git
 cd dscan
 
-# Build CLI binary
+# Build CLI
 cargo build --release -p dscan
 
-# Build or run Desktop GUI
+# Run Desktop GUI
 cargo run --release -p dscan-gui
 
 # Build Android JNI library (requires cargo-ndk + Android NDK)
@@ -138,7 +138,7 @@ cargo ndk -t arm64-v8a build --release -p dscan-android
 
 ## Usage
 
-### CLI Quick Scan
+### CLI quick scan
 
 ```bash
 # Scan current directory
@@ -167,9 +167,9 @@ dscan . --all
 | `TARGET_PATH` | Path | Root path to scan | `.` (current directory) |
 | `--top` | `<N>` | Number of largest directories and files to display | `25` |
 | `--depth` | `<N>` | Maximum directory depth for recursive rollup | Unlimited |
-| `-j`, `--threads` | `<N>` | Number of concurrent worker threads | Auto (SSD: `cores × 4`, HDD: `cores` clamped 2–4) |
+| `-j`, `--threads` | `<N>` | Number of concurrent worker threads | Auto (SSD: `cores * 4`, HDD: `cores` clamped 2-4) |
 | `--exclude` | `<PATTERN>` | Path or folder name pattern to skip | System defaults (`/proc`, `/sys`, etc.) |
-| `-a`, `--all` | None | Disable default exclusions (scan `.git`, `node_modules`, `target`, etc.) | Off |
+| `-a`, `--all` | None | Disable default exclusions (scan `.git`, `node_modules`, `target`) | Off |
 | `--no-default-excludes` | None | Same as `-a` / `--all` | Off |
 | `--json` | None | Output machine-readable RFC 8259 JSON to stdout | Off |
 | `--ext` | None | Display top 10 file extensions breakdown table | Off |
@@ -196,7 +196,7 @@ dscan/
 │   │   ├── src/views/    # Directory tree, cushion treemap, legend, status bar
 │   │   ├── src/treemap/  # Squarified layout and cushion shading algorithms
 │   │   └── src/system.rs # File reveal and safe trash operations
-│   └── dscan-android/    # Rust JNI bridge for Android (cdylib → libdscan.so)
+│   └── dscan-android/    # Rust JNI bridge for Android (cdylib -> libdscan.so)
 ├── android/              # Jetpack Compose Material 3 app (Kotlin)
 │   └── app/src/main/kotlin/com/dscan/app/
 │       ├── DscanBridge.kt    # JNI native method declarations
@@ -207,13 +207,13 @@ dscan/
 
 ---
 
-## Key Design Decisions
+## Design decisions
 
-- **No libc dependency on Linux**: All syscalls (`getdents64`, `statx`, `openat2`, `io_uring`, `prlimit64`) are issued via raw `syscall()` with architecture-specific numbers (x86_64: 217, aarch64: 61 for `getdents64`).
-- **Disk space, not apparent size**: Uses `stx_blocks * 512` (Linux) and `AllocationSize` (Windows) to measure actual disk allocation, correctly handling sparse files and filesystem block boundaries.
-- **Device boundary enforcement**: `openat2(RESOLVE_NO_XDEV)` prevents traversing into mounted virtual filesystems (`/proc`, `/sys`, `/dev`) without relying on path-string exclusion lists.
-- **Adaptive HDD/SSD detection**: Reads `/sys/dev/block/<major>:<minor>/queue/rotational` on Linux and `IOCTL_STORAGE_QUERY_PROPERTY(StorageDeviceSeekPenaltyProperty)` on Windows to auto-tune thread count. HDDs get 2–4 threads to avoid seek thrashing; NVMe SSDs get up to 64.
-- **O(N) rollup**: Directory sizes are propagated bottom-up via depth-sorted hash table, replacing the earlier O(N²) insert-based rollup that froze on large filesystems.
+- **Direct Linux syscalls**: No libc wrapper on Linux. All syscalls (`getdents64`, `statx`, `openat2`, `io_uring`, `prlimit64`) use raw `syscall()` with architecture-specific numbers (x86_64: 217, aarch64: 61 for `getdents64`).
+- **Disk allocation, not file length**: Reads `stx_blocks * 512` on Linux and `AllocationSize` on Windows. Gives actual space consumed on disk, handling sparse files and block rounding correctly.
+- **Filesystem boundary guard**: `openat2(RESOLVE_NO_XDEV)` stops traversal from leaking into mounted virtual filesystems (`/proc`, `/sys`, `/dev`) without relying on hardcoded exclusion paths.
+- **Storage-aware thread counts**: Inspects `/sys/dev/block/<major>:<minor>/queue/rotational` on Linux and `StorageDeviceSeekPenaltyProperty` on Windows. Spinning drives get 2-4 threads to prevent head thrashing; NVMe drives scale up to 64.
+- **Linear rollup**: Directory sizes roll up bottom-up through a depth-sorted hash table in O(N) time, avoiding the O(N^2) parent-lookup freezes common in naive recursive aggregators.
 
 ---
 
