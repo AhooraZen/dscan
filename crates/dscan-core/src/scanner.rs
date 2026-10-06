@@ -1407,7 +1407,7 @@ fn scan_directory_tree_windows(
                 let meta_res = if state.config.follow_symlinks {
                     entry.metadata()
                 } else {
-                    entry.symlink_metadata()
+                    std::fs::symlink_metadata(entry.path())
                 };
                 if let Ok(meta) = meta_res {
                     if meta.is_dir() {
