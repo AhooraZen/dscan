@@ -1155,6 +1155,7 @@ fn scan_directory_tree_windows(
     let wide_ptr = wide_path_stack.as_null_terminated();
     if let Some(h_dir) = unsafe { open_dir_from_wide_ptr(wide_ptr) } {
         if !state.config.cross_filesystems
+            && root_dev != 0
             // SAFETY: h_dir is a valid open directory handle.
             && let Some(vol) = (unsafe { get_volume_serial_number(h_dir) })
             && vol != root_dev
