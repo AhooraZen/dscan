@@ -11,6 +11,9 @@ pub struct CushionTreemapElement {
     selected_id: Option<u32>,
     hovered_id: Option<u32>,
     filter_ext: Option<String>,
+    bg_color: gpui::Rgba,
+    select_color: gpui::Rgba,
+    hover_color: gpui::Rgba,
     style: StyleRefinement,
 }
 
@@ -21,8 +24,26 @@ impl CushionTreemapElement {
             selected_id: None,
             hovered_id: None,
             filter_ext: None,
+            bg_color: theme::BG_DARK,
+            select_color: theme::ACCENT_BLUE,
+            hover_color: theme::TEXT_PRIMARY,
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn bg_color(mut self, color: gpui::Rgba) -> Self {
+        self.bg_color = color;
+        self
+    }
+
+    pub fn select_color(mut self, color: gpui::Rgba) -> Self {
+        self.select_color = color;
+        self
+    }
+
+    pub fn hover_color(mut self, color: gpui::Rgba) -> Self {
+        self.hover_color = color;
+        self
     }
 
     pub fn selected_id(mut self, id: Option<u32>) -> Self {
@@ -101,7 +122,7 @@ impl Element for CushionTreemapElement {
         window: &mut Window,
         _cx: &mut App,
     ) {
-        window.paint_quad(fill(bounds, theme::BG_DARK));
+        window.paint_quad(fill(bounds, self.bg_color));
 
         let origin_x = bounds.origin.x;
         let origin_y = bounds.origin.y;
@@ -137,13 +158,9 @@ impl Element for CushionTreemapElement {
             window.paint_quad(fill(quad_bounds, shaded_color));
 
             if self.selected_id == Some(node.id) {
-                window.paint_quad(outline(quad_bounds, theme::ACCENT_BLUE, BorderStyle::Solid));
+                window.paint_quad(outline(quad_bounds, self.select_color, BorderStyle::Solid));
             } else if self.hovered_id == Some(node.id) {
-                window.paint_quad(outline(
-                    quad_bounds,
-                    theme::TEXT_PRIMARY,
-                    BorderStyle::Solid,
-                ));
+                window.paint_quad(outline(quad_bounds, self.hover_color, BorderStyle::Solid));
             }
         }
     }

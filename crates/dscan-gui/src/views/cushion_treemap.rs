@@ -11,6 +11,7 @@ use crate::treemap::CushionTreemapElement;
 use dscan_core::format_bytes;
 
 pub fn render_cushion_treemap(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElement {
+    let t = app.theme();
     let hovered_node = app
         .state
         .hovered_node_id
@@ -25,9 +26,12 @@ pub fn render_cushion_treemap(app: &DscanApp, cx: &Context<DscanApp>) -> impl In
         .id("treemap-pane")
         .relative()
         .size_full()
-        .bg(theme::BG_DARK)
+        .bg(t.bg)
         .child(
             CushionTreemapElement::new(app.state.layout_nodes.clone())
+                .bg_color(t.bg)
+                .select_color(t.accent_blue)
+                .hover_color(t.text_primary)
                 .selected_id(app.state.selected_node_id)
                 .hovered_id(app.state.hovered_node_id)
                 .filter_ext(app.state.selected_extension.clone()),
@@ -61,18 +65,18 @@ pub fn render_cushion_treemap(app: &DscanApp, cx: &Context<DscanApp>) -> impl In
             pane.child(
                 div()
                     .absolute()
-                    .bottom(px(12.0))
-                    .left(px(12.0))
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .bg(theme::SURFACE_DARK)
+                    .bottom(px(14.0))
+                    .left(px(14.0))
+                    .px_4()
+                    .py_3()
+                    .rounded_lg()
+                    .bg(t.surface)
                     .border_1()
-                    .border_color(theme::BORDER_LIGHT)
+                    .border_color(t.border_light)
                     .h_flex()
                     .gap_3()
                     .items_center()
-                    .child(div().w(px(10.0)).h(px(10.0)).rounded_sm().bg(ext_color))
+                    .child(div().w(px(12.0)).h(px(12.0)).rounded_sm().bg(ext_color))
                     .child(
                         div()
                             .v_flex()
@@ -81,21 +85,23 @@ pub fn render_cushion_treemap(app: &DscanApp, cx: &Context<DscanApp>) -> impl In
                                 div()
                                     .h_flex()
                                     .gap_2()
+                                    .items_center()
                                     .child(
                                         div()
                                             .font_weight(FontWeight::BOLD)
-                                            .text_size(px(12.0))
-                                            .text_color(theme::TEXT_PRIMARY)
+                                            .text_size(px(13.0))
+                                            .text_color(t.text_primary)
                                             .child(node.name.clone()),
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(11.0))
-                                            .text_color(theme::TEXT_MUTED)
+                                            .text_size(px(12.0))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(t.accent_amber)
                                             .child(format_bytes(node.total_bytes)),
                                     ),
                             )
-                            .child(div().text_size(px(10.0)).text_color(theme::TEXT_DIM).child(
+                            .child(div().text_size(px(11.0)).text_color(t.text_dim).child(
                                 if node.is_dir {
                                     format!(
                                         "Directory (Depth {}, {} items) — Right-click for options",
@@ -113,19 +119,20 @@ pub fn render_cushion_treemap(app: &DscanApp, cx: &Context<DscanApp>) -> impl In
                     .child(
                         div()
                             .h_flex()
-                            .gap_1()
+                            .gap_2()
                             .items_center()
                             .child(
                                 div()
                                     .id("treemap-tooltip-reveal")
-                                    .px_2()
-                                    .py(px(2.0))
-                                    .rounded_sm()
-                                    .bg(theme::SURFACE_HOVER)
-                                    .hover(|h| h.bg(theme::BORDER_LIGHT))
+                                    .px_3()
+                                    .py(px(3.0))
+                                    .rounded_md()
+                                    .bg(t.surface_hover)
+                                    .hover(move |h| h.bg(t.border_light))
                                     .cursor_pointer()
-                                    .text_size(px(10.0))
-                                    .text_color(theme::TEXT_PRIMARY)
+                                    .text_size(px(11.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(t.text_primary)
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _window, cx| {
@@ -137,15 +144,16 @@ pub fn render_cushion_treemap(app: &DscanApp, cx: &Context<DscanApp>) -> impl In
                             .child(
                                 div()
                                     .id("treemap-tooltip-trash")
-                                    .px_2()
-                                    .py(px(2.0))
-                                    .rounded_sm()
-                                    .bg(theme::SURFACE_HOVER)
-                                    .hover(|h| h.bg(theme::ACCENT_RED))
+                                    .px_3()
+                                    .py(px(3.0))
+                                    .rounded_md()
+                                    .bg(t.surface_hover)
+                                    .hover(move |h| h.bg(t.accent_red))
                                     .cursor_pointer()
-                                    .text_size(px(10.0))
-                                    .text_color(theme::ACCENT_RED)
-                                    .hover(|h| h.text_color(theme::TEXT_PRIMARY))
+                                    .text_size(px(11.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(t.accent_red)
+                                    .hover(move |h| h.text_color(t.text_primary))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _window, cx| {

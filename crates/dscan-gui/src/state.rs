@@ -28,6 +28,7 @@ pub struct AppState {
     pub is_complete: bool,
     pub layout_width: f32,
     pub layout_height: f32,
+    pub theme_mode: crate::theme::ThemeMode,
 }
 
 impl Default for AppState {
@@ -62,7 +63,13 @@ impl AppState {
             is_complete: false,
             layout_width: 800.0,
             layout_height: 500.0,
+            theme_mode: crate::theme::ThemeMode::Dark,
         }
+    }
+
+    /// Toggle between Dark and Light mode
+    pub fn toggle_theme(&mut self) {
+        self.theme_mode = self.theme_mode.toggle();
     }
 
     /// Select logical drive by index and update target path

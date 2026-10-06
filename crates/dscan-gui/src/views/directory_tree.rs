@@ -10,6 +10,7 @@ use crate::theme;
 use dscan_core::format_bytes;
 
 pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElement {
+    let t = app.theme();
     let is_scanning = app.state.is_scanning;
     let is_complete = app.state.is_complete;
 
@@ -17,28 +18,29 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
         .id("directory-tree-pane")
         .v_flex()
         .size_full()
-        .bg(theme::BG_DARK)
+        .bg(t.bg)
         .border_r_1()
-        .border_color(theme::BORDER_DARK)
+        .border_color(t.border)
         .child(
             // Tree Table Header
             div()
                 .h_flex()
                 .w_full()
-                .h(px(28.0))
+                .h(px(32.0))
                 .px_3()
-                .bg(theme::SURFACE_DARK)
+                .bg(t.surface)
                 .border_b_1()
-                .border_color(theme::BORDER_DARK)
-                .text_size(px(11.0))
+                .border_color(t.border)
+                .text_size(px(12.0))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme::TEXT_MUTED)
+                .text_color(t.text_muted)
                 .justify_between()
-                .child(div().w(px(220.0)).child("Name"))
-                .child(div().w(px(70.0)).text_right().child("Size"))
-                .child(div().w(px(50.0)).text_right().child("%"))
-                .child(div().w(px(50.0)).text_right().child("Items"))
-                .child(div().w(px(50.0)).text_center().child("Actions")),
+                .items_center()
+                .child(div().w(px(240.0)).child("Name"))
+                .child(div().w(px(80.0)).text_right().child("Size"))
+                .child(div().w(px(55.0)).text_right().child("%"))
+                .child(div().w(px(55.0)).text_right().child("Items"))
+                .child(div().w(px(60.0)).text_center().child("Actions")),
         )
         .child(
             // Content region
@@ -68,9 +70,9 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                             .p_4()
                             .gap_2()
                             .rounded_md()
-                            .bg(theme::SURFACE_DARK)
+                            .bg(t.surface)
                             .border_1()
-                            .border_color(theme::BORDER_DARK)
+                            .border_color(t.border)
                             .child(
                                 div()
                                     .h_flex()
@@ -78,29 +80,26 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                     .items_center()
                                     .child(
                                         div()
-                                            .text_size(px(18.0))
-                                            .text_color(theme::ACCENT_AMBER)
+                                            .text_size(px(20.0))
+                                            .text_color(t.accent_amber)
                                             .font_weight(FontWeight::BOLD)
                                             .child(pacman_art),
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(13.0))
+                                            .text_size(px(14.0))
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(theme::TEXT_PRIMARY)
+                                            .text_color(t.text_primary)
                                             .child("Scanning directories..."),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .text_color(theme::TEXT_MUTED)
-                                    .child(format!(
-                                        "Scanned: {scanned_files} files ({})",
-                                        format_bytes(scanned_bytes)
-                                    )),
-                            )
-                            .child(div().text_size(px(10.0)).text_color(theme::TEXT_DIM).child(
+                            .child(div().text_size(px(12.0)).text_color(t.text_muted).child(
+                                format!(
+                                    "Scanned: {scanned_files} files ({})",
+                                    format_bytes(scanned_bytes)
+                                ),
+                            ))
+                            .child(div().text_size(px(11.0)).text_color(t.text_dim).child(
                                 if current_path.is_empty() {
                                     "Traversing...".to_string()
                                 } else {
@@ -118,7 +117,7 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                 .items_center()
                                 .justify_center()
                                 .p_8()
-                                .text_color(theme::TEXT_MUTED)
+                                .text_color(t.text_muted)
                                 .text_size(px(13.0))
                                 .child("Select a drive and click 'Scan' to start"),
                         )
@@ -138,21 +137,22 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                         let node = &app.state.raw_nodes[node_id as usize];
                         let is_selected = app.state.selected_node_id == Some(node_id);
                         let is_expanded = app.state.expanded_dirs.contains(&node_id);
-                        let indent = (node.rel_depth as f32) * 12.0;
+                        let indent = (node.rel_depth as f32) * 14.0;
                         let pct = (node.total_bytes as f64 / total_bytes as f64) * 100.0;
 
                         div()
                             .id(("tree-row", node_id))
                             .h_flex()
                             .w_full()
-                            .h(px(22.0))
+                            .h(px(26.0))
                             .px_2()
                             .rounded_sm()
                             .cursor_pointer()
-                            .text_size(px(11.0))
-                            .when(is_selected, |s| s.bg(theme::SURFACE_HOVER))
-                            .when(!is_selected, |s| s.hover(|h| h.bg(theme::SURFACE_DARK)))
+                            .text_size(px(12.0))
+                            .when(is_selected, |s| s.bg(t.surface_hover))
+                            .when(!is_selected, |s| s.hover(|h| h.bg(t.surface)))
                             .justify_between()
+                            .items_center()
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _window, cx| {
@@ -173,7 +173,7 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                 // Name column with indent and expand toggle
                                 div()
                                     .h_flex()
-                                    .w(px(220.0))
+                                    .w(px(240.0))
                                     .items_center()
                                     .pl(px(indent))
                                     .gap_1()
@@ -182,7 +182,8 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                         row.child(
                                             div()
                                                 .cursor_pointer()
-                                                .text_color(theme::TEXT_MUTED)
+                                                .text_color(t.text_muted)
+                                                .px(px(2.0))
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     cx.listener(move |this, _, _window, cx| {
@@ -191,10 +192,10 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                                 )
                                                 .child(caret),
                                         )
-                                        .child(div().text_color(theme::ACCENT_AMBER).child("📁"))
+                                        .child(div().text_color(t.accent_amber).child("📁"))
                                     })
                                     .when(!node.is_dir, |row| {
-                                        row.child(div().w(px(10.0))).child(
+                                        row.child(div().w(px(14.0))).child(
                                             div()
                                                 .text_color(theme::extension_color(&node.extension))
                                                 .child("🗎"),
@@ -203,9 +204,9 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                     .child(
                                         div()
                                             .text_color(if is_selected {
-                                                theme::ACCENT_BLUE
+                                                t.accent_blue
                                             } else {
-                                                theme::TEXT_PRIMARY
+                                                t.text_primary
                                             })
                                             .font_weight(if node.is_dir {
                                                 FontWeight::MEDIUM
@@ -217,66 +218,63 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                             )
                             .child(
                                 div()
-                                    .w(px(70.0))
+                                    .w(px(80.0))
                                     .text_right()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(t.text_muted)
                                     .child(format_bytes(node.total_bytes)),
                             )
                             .child(
                                 div()
                                     .h_flex()
-                                    .w(px(50.0))
+                                    .w(px(55.0))
                                     .justify_end()
                                     .items_center()
                                     .gap_1()
                                     .child(
                                         div()
-                                            .w(px(20.0))
+                                            .w(px(24.0))
                                             .h(px(4.0))
                                             .rounded_sm()
-                                            .bg(theme::BORDER_DARK)
+                                            .bg(t.border_light)
                                             .child(
                                                 div()
                                                     .h_full()
                                                     .rounded_sm()
-                                                    .bg(theme::ACCENT_BLUE)
-                                                    .w(px((20.0 * (pct / 100.0) as f32)
-                                                        .clamp(1.0, 20.0))),
+                                                    .bg(t.accent_blue)
+                                                    .w(px((24.0 * (pct / 100.0) as f32)
+                                                        .clamp(1.0, 24.0))),
                                             ),
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(10.0))
-                                            .text_color(theme::TEXT_DIM)
+                                            .text_size(px(11.0))
+                                            .text_color(t.text_dim)
                                             .child(format!("{pct:.1}%")),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .w(px(50.0))
-                                    .text_right()
-                                    .text_color(theme::TEXT_DIM)
-                                    .child(if node.is_dir {
-                                        format!("{}", node.children_ids.len())
-                                    } else {
-                                        "-".to_string()
-                                    }),
-                            )
+                            .child(div().w(px(55.0)).text_right().text_color(t.text_dim).child(
+                                if node.is_dir {
+                                    format!("{}", node.children_ids.len())
+                                } else {
+                                    "-".to_string()
+                                },
+                            ))
                             .child(
                                 div()
                                     .h_flex()
-                                    .w(px(50.0))
+                                    .w(px(60.0))
                                     .justify_center()
                                     .items_center()
-                                    .gap_1()
+                                    .gap_2()
                                     .child(
                                         div()
                                             .id(("reveal-btn", node_id))
                                             .cursor_pointer()
-                                            .px_1()
+                                            .px(px(4.0))
+                                            .py(px(2.0))
                                             .rounded_sm()
-                                            .hover(|h| h.bg(theme::SURFACE_HOVER))
-                                            .text_size(px(11.0))
+                                            .hover(move |h| h.bg(t.surface_hover))
+                                            .text_size(px(12.0))
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(move |this, _, _window, cx| {
@@ -289,11 +287,12 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
                                         div()
                                             .id(("trash-btn", node_id))
                                             .cursor_pointer()
-                                            .px_1()
+                                            .px(px(4.0))
+                                            .py(px(2.0))
                                             .rounded_sm()
-                                            .hover(|h| h.bg(theme::SURFACE_HOVER))
-                                            .text_size(px(11.0))
-                                            .text_color(theme::ACCENT_RED)
+                                            .hover(move |h| h.bg(t.surface_hover))
+                                            .text_size(px(12.0))
+                                            .text_color(t.accent_red)
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(move |this, _, _window, cx| {
@@ -309,20 +308,19 @@ pub fn render_directory_tree(app: &DscanApp, cx: &Context<DscanApp>) -> impl Int
 }
 
 fn collect_visible_tree_rows(
-    nodes: &[dscan_core::TreemapNodeDto],
-    curr_id: u32,
+    nodes: &[dscan_core::snapshot::TreemapNodeDto],
+    node_id: u32,
     expanded: &std::collections::HashSet<u32>,
     out: &mut Vec<u32>,
 ) {
-    if curr_id as usize >= nodes.len() {
+    if node_id as usize >= nodes.len() {
         return;
     }
-    out.push(curr_id);
-
-    if expanded.contains(&curr_id) {
-        let node = &nodes[curr_id as usize];
-        for &cid in &node.children_ids {
-            collect_visible_tree_rows(nodes, cid, expanded, out);
+    out.push(node_id);
+    let node = &nodes[node_id as usize];
+    if node.is_dir && expanded.contains(&node_id) {
+        for &child_id in &node.children_ids {
+            collect_visible_tree_rows(nodes, child_id, expanded, out);
         }
     }
 }

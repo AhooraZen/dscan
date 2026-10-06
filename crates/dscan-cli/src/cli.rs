@@ -99,6 +99,10 @@ impl CliOptions {
                     cross_filesystems = true;
                     i += 1;
                 }
+                "-a" | "--all" | "--no-default-excludes" => {
+                    custom_excludes.clear();
+                    i += 1;
+                }
                 "-V" | "--version" => {
                     println!("dscan {}", env!("CARGO_PKG_VERSION"));
                     return None;
@@ -123,6 +127,9 @@ impl CliOptions {
                         "  -L, --follow-symlinks Follow directory symlinks (e.g. Termux ~/storage)"
                     );
                     println!("  -x, --cross-device    Scan across filesystem mount boundaries");
+                    println!(
+                        "  -a, --all             Scan everything without default exclusions (includes .git)"
+                    );
                     println!(
                         "  --json                Output scan results as machine-readable JSON"
                     );
@@ -240,6 +247,17 @@ mod tests {
         assert_eq!(opts.max_depth, 5);
         assert_eq!(opts.top_limit, 10);
         assert_eq!(opts.threads, 4);
+    }
+
+    #[test]
+    fn test_cli_all_flag_clears_default_excludes() {
+        let args = vec!["dscan".to_string(), "-a".to_string()];
+        let opts = CliOptions::parse_from_args(&args).expect("should parse");
+        assert!(opts.excludes.is_empty());
+
+        let args_long = vec!["dscan".to_string(), "--no-default-excludes".to_string()];
+        let opts_long = CliOptions::parse_from_args(&args_long).expect("should parse");
+        assert!(opts_long.excludes.is_empty());
     }
 
     #[test]

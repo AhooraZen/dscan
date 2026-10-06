@@ -6,73 +6,78 @@ use gpui::{
 use gpui_kit::base::StyledExt as _;
 
 use crate::app::DscanApp;
-use crate::theme;
 
 pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElement {
+    let t = app.theme();
     let is_scanning = app.state.is_scanning;
     let is_paused = app.state.is_paused;
+    let is_dark = app.state.theme_mode.is_dark();
 
     div()
         .id("title-bar")
         .h_flex()
         .w_full()
-        .h(px(44.0))
+        .h(px(48.0))
         .px_4()
-        .bg(theme::SURFACE_DARK)
+        .bg(t.surface)
         .border_b_1()
-        .border_color(theme::BORDER_DARK)
+        .border_color(t.border)
         .justify_between()
+        .items_center()
         .child(
             // Left branding and target path
             div()
                 .h_flex()
-                .gap_3()
+                .items_center()
+                .gap_4()
                 .child(
                     div()
                         .h_flex()
-                        .gap_1()
+                        .items_center()
+                        .gap_2()
                         .child(
                             div()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(theme::ACCENT_GREEN)
-                                .text_size(px(14.0))
-                                .child("dscan"),
+                                .text_color(t.accent_green)
+                                .text_size(px(16.0))
+                                .child("⚡ dscan"),
                         )
                         .child(
                             div()
                                 .text_size(px(10.0))
-                                .px_1()
+                                .font_weight(FontWeight::MEDIUM)
+                                .px(px(6.0))
+                                .py(px(1.0))
                                 .rounded_sm()
-                                .bg(theme::BORDER_DARK)
-                                .text_color(theme::TEXT_MUTED)
+                                .bg(t.surface_hover)
+                                .text_color(t.text_muted)
                                 .child(concat!("v", env!("CARGO_PKG_VERSION"))),
                         ),
                 )
                 .child(
                     div()
                         .h_flex()
+                        .items_center()
                         .gap_1()
                         .child(
                             div()
                                 .text_size(px(12.0))
-                                .text_color(theme::TEXT_MUTED)
+                                .text_color(t.text_muted)
                                 .child("Target:"),
                         )
                         .child(
                             div()
-                                .text_size(px(12.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme::TEXT_PRIMARY)
+                                .text_size(px(13.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(t.text_primary)
                                 .child(app.state.target_path.to_string_lossy().to_string()),
                         ),
                 ),
         )
         .child(
             // Center drive chips
-            div()
-                .h_flex()
-                .gap_1()
-                .children(app.state.drives.iter().enumerate().map(|(idx, drive)| {
+            div().h_flex().items_center().gap_2().children(
+                app.state.drives.iter().enumerate().map(|(idx, drive)| {
                     let is_selected = idx == app.state.selected_drive_idx;
                     let mount_str = drive.mount_point.to_string_lossy().to_string();
                     let used_pct = drive.used_percentage();
@@ -80,16 +85,21 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
 
                     div()
                         .id(("drive-chip", idx))
-                        .px_2()
-                        .py(px(2.0))
+                        .px_3()
+                        .py(px(4.0))
                         .rounded_md()
-                        .text_size(px(11.0))
+                        .text_size(px(12.0))
+                        .font_weight(if is_selected {
+                            FontWeight::SEMIBOLD
+                        } else {
+                            FontWeight::NORMAL
+                        })
                         .cursor_pointer()
                         .when(is_selected, |s| {
-                            s.bg(theme::BORDER_LIGHT).text_color(theme::TEXT_PRIMARY)
+                            s.bg(t.border_light).text_color(t.text_primary)
                         })
                         .when(!is_selected, |s| {
-                            s.bg(theme::SURFACE_HOVER).text_color(theme::TEXT_MUTED)
+                            s.bg(t.surface_hover).text_color(t.text_muted)
                         })
                         .hover(|s| s.opacity(0.85))
                         .on_mouse_down(
@@ -99,24 +109,59 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                             }),
                         )
                         .child(label)
-                })),
+                }),
+            ),
         )
         .child(
-            // Right scan controls
+            // Right scan controls & Theme Toggle
             div()
                 .h_flex()
-                .gap_2()
+                .items_center()
+                .gap_3()
+                .child(
+                    // Theme Switcher Button
+                    div()
+                        .id("btn-theme-toggle")
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .px_3()
+                        .py(px(5.0))
+                        .rounded_md()
+                        .bg(t.surface_hover)
+                        .hover(move |h| h.bg(t.border_light))
+                        .cursor_pointer()
+                        .text_size(px(12.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(t.text_primary)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _window, cx| {
+                                this.toggle_theme(cx);
+                            }),
+                        )
+                        .child(if is_dark { "🌙 Dark" } else { "☀️ Light" }),
+                )
                 .when(!is_scanning, |s| {
                     s.child(
                         div()
                             .id("btn-scan")
-                            .px_3()
-                            .py(px(3.0))
+                            .px_4()
+                            .py(px(5.0))
                             .rounded_md()
-                            .bg(theme::ACCENT_GREEN)
-                            .text_color(theme::BG_DARK)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_size(px(12.0))
+                            .bg(t.accent_green)
+                            .text_color(if is_dark {
+                                t.bg
+                            } else {
+                                gpui::Rgba {
+                                    r: 1.0,
+                                    g: 1.0,
+                                    b: 1.0,
+                                    a: 1.0,
+                                }
+                            })
+                            .font_weight(FontWeight::BOLD)
+                            .text_size(px(13.0))
                             .cursor_pointer()
                             .hover(|s| s.opacity(0.85))
                             .active(|s| s.opacity(0.70))
@@ -126,20 +171,29 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                                     this.start_scan(cx);
                                 }),
                             )
-                            .child("Scan"),
+                            .child("▶ Scan"),
                     )
                 })
                 .when(is_scanning, |s| {
                     s.child(
                         div()
                             .id("btn-pause")
-                            .px_3()
-                            .py(px(3.0))
+                            .px_4()
+                            .py(px(5.0))
                             .rounded_md()
-                            .bg(theme::ACCENT_AMBER)
-                            .text_color(theme::BG_DARK)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_size(px(12.0))
+                            .bg(t.accent_amber)
+                            .text_color(if is_dark {
+                                t.bg
+                            } else {
+                                gpui::Rgba {
+                                    r: 1.0,
+                                    g: 1.0,
+                                    b: 1.0,
+                                    a: 1.0,
+                                }
+                            })
+                            .font_weight(FontWeight::BOLD)
+                            .text_size(px(13.0))
                             .cursor_pointer()
                             .hover(|s| s.opacity(0.85))
                             .on_mouse_down(
@@ -152,18 +206,23 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                                     }
                                 }),
                             )
-                            .child(if is_paused { "Resume" } else { "Pause" }),
+                            .child(if is_paused { "▶ Resume" } else { "⏸ Pause" }),
                     )
                     .child(
                         div()
                             .id("btn-cancel")
-                            .px_3()
-                            .py(px(3.0))
+                            .px_4()
+                            .py(px(5.0))
                             .rounded_md()
-                            .bg(theme::ACCENT_RED)
-                            .text_color(theme::TEXT_PRIMARY)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_size(px(12.0))
+                            .bg(t.accent_red)
+                            .text_color(gpui::Rgba {
+                                r: 1.0,
+                                g: 1.0,
+                                b: 1.0,
+                                a: 1.0,
+                            })
+                            .font_weight(FontWeight::BOLD)
+                            .text_size(px(13.0))
                             .cursor_pointer()
                             .hover(|s| s.opacity(0.85))
                             .on_mouse_down(
@@ -172,7 +231,7 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                                     this.cancel_scan(cx);
                                 }),
                             )
-                            .child("Cancel"),
+                            .child("⏹ Cancel"),
                     )
                 }),
         )

@@ -10,19 +10,101 @@ pub const fn const_rgb(hex: u32) -> Rgba {
     }
 }
 
-// High-contrast Slate Dark theme (WCAG AA 4.5:1 compliant)
-pub const BG_DARK: Rgba = const_rgb(0x0F172A); // Slate 900
-pub const SURFACE_DARK: Rgba = const_rgb(0x1E293B); // Slate 800
-pub const SURFACE_HOVER: Rgba = const_rgb(0x334155); // Slate 700
-pub const BORDER_DARK: Rgba = const_rgb(0x334155); // Slate 700
-pub const BORDER_LIGHT: Rgba = const_rgb(0x475569); // Slate 600
-pub const TEXT_PRIMARY: Rgba = const_rgb(0xF8FAFC); // Slate 50
-pub const TEXT_MUTED: Rgba = const_rgb(0x94A3B8); // Slate 400
-pub const TEXT_DIM: Rgba = const_rgb(0x64748B); // Slate 500
-pub const ACCENT_BLUE: Rgba = const_rgb(0x38BDF8); // Sky 400
-pub const ACCENT_GREEN: Rgba = const_rgb(0x34D399); // Emerald 400
-pub const ACCENT_AMBER: Rgba = const_rgb(0xFBBF24); // Amber 400
-pub const ACCENT_RED: Rgba = const_rgb(0xEF4444); // Red 500
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThemeMode {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl ThemeMode {
+    pub const fn toggle(self) -> Self {
+        match self {
+            Self::Dark => Self::Light,
+            Self::Light => Self::Dark,
+        }
+    }
+
+    pub const fn is_dark(self) -> bool {
+        matches!(self, Self::Dark)
+    }
+
+    pub const fn colors(self) -> ThemeColors {
+        match self {
+            Self::Dark => ThemeColors::dark(),
+            Self::Light => ThemeColors::light(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThemeColors {
+    pub bg: Rgba,
+    pub surface: Rgba,
+    pub surface_hover: Rgba,
+    pub surface_active: Rgba,
+    pub border: Rgba,
+    pub border_light: Rgba,
+    pub text_primary: Rgba,
+    pub text_muted: Rgba,
+    pub text_dim: Rgba,
+    pub accent_blue: Rgba,
+    pub accent_green: Rgba,
+    pub accent_amber: Rgba,
+    pub accent_red: Rgba,
+}
+
+impl ThemeColors {
+    pub const fn dark() -> Self {
+        Self {
+            bg: const_rgb(0x0F172A),             // Slate 900
+            surface: const_rgb(0x1E293B),        // Slate 800
+            surface_hover: const_rgb(0x334155),  // Slate 700
+            surface_active: const_rgb(0x475569), // Slate 600
+            border: const_rgb(0x334155),         // Slate 700
+            border_light: const_rgb(0x475569),   // Slate 600
+            text_primary: const_rgb(0xF8FAFC),   // Slate 50
+            text_muted: const_rgb(0x94A3B8),     // Slate 400
+            text_dim: const_rgb(0x64748B),       // Slate 500
+            accent_blue: const_rgb(0x38BDF8),    // Sky 400
+            accent_green: const_rgb(0x34D399),   // Emerald 400
+            accent_amber: const_rgb(0xFBBF24),   // Amber 400
+            accent_red: const_rgb(0xEF4444),     // Red 500
+        }
+    }
+
+    pub const fn light() -> Self {
+        Self {
+            bg: const_rgb(0xF8FAFC),             // Slate 50
+            surface: const_rgb(0xFFFFFF),        // White
+            surface_hover: const_rgb(0xF1F5F9),  // Slate 100
+            surface_active: const_rgb(0xE2E8F0), // Slate 200
+            border: const_rgb(0xE2E8F0),         // Slate 200
+            border_light: const_rgb(0xCBD5E1),   // Slate 300
+            text_primary: const_rgb(0x0F172A),   // Slate 900
+            text_muted: const_rgb(0x475569),     // Slate 600
+            text_dim: const_rgb(0x64748B),       // Slate 500
+            accent_blue: const_rgb(0x0284C7),    // Sky 600
+            accent_green: const_rgb(0x059669),   // Emerald 600
+            accent_amber: const_rgb(0xD97706),   // Amber 600
+            accent_red: const_rgb(0xDC2626),     // Red 600
+        }
+    }
+}
+
+// Default constants for backward compatibility
+pub const BG_DARK: Rgba = const_rgb(0x0F172A);
+pub const SURFACE_DARK: Rgba = const_rgb(0x1E293B);
+pub const SURFACE_HOVER: Rgba = const_rgb(0x334155);
+pub const BORDER_DARK: Rgba = const_rgb(0x334155);
+pub const BORDER_LIGHT: Rgba = const_rgb(0x475569);
+pub const TEXT_PRIMARY: Rgba = const_rgb(0xF8FAFC);
+pub const TEXT_MUTED: Rgba = const_rgb(0x94A3B8);
+pub const TEXT_DIM: Rgba = const_rgb(0x64748B);
+pub const ACCENT_BLUE: Rgba = const_rgb(0x38BDF8);
+pub const ACCENT_GREEN: Rgba = const_rgb(0x34D399);
+pub const ACCENT_AMBER: Rgba = const_rgb(0xFBBF24);
+pub const ACCENT_RED: Rgba = const_rgb(0xEF4444);
 
 // 16 distinct perceptual OKLCH-derived colors for file extensions
 pub const EXTENSION_PALETTE: [Rgba; 16] = [

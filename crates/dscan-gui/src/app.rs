@@ -9,7 +9,6 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::resizable::*;
 
 use crate::state::AppState;
-use crate::theme;
 use crate::views::cushion_treemap::render_cushion_treemap;
 use crate::views::directory_tree::render_directory_tree;
 use crate::views::extension_legend::render_extension_legend;
@@ -219,14 +218,24 @@ impl DscanApp {
         self.pacman_phase = (self.pacman_phase + 1) % 4;
         cx.notify();
     }
+
+    pub fn toggle_theme(&mut self, cx: &mut Context<Self>) {
+        self.state.toggle_theme();
+        cx.notify();
+    }
+
+    pub fn theme(&self) -> crate::theme::ThemeColors {
+        self.state.theme_mode.colors()
+    }
 }
 
 impl Render for DscanApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme();
         let size = window.viewport_size();
         let avail_w: f32 = size.width.into();
         let total_h: f32 = size.height.into();
-        let avail_h = (total_h - 44.0 - 26.0).max(100.0);
+        let avail_h = (total_h - 48.0 - 30.0).max(100.0);
 
         // Treemap gets bottom half of available vertical space
         self.state.update_layout_size(avail_w, avail_h * 0.5);
@@ -235,8 +244,8 @@ impl Render for DscanApp {
             .id("dscan-app-root")
             .size_full()
             .v_flex()
-            .bg(theme::BG_DARK)
-            .text_color(theme::TEXT_PRIMARY)
+            .bg(t.bg)
+            .text_color(t.text_primary)
             .on_action(cx.listener(|this, _: &OpenPath, _window, cx| {
                 let next_idx = (this.state.selected_drive_idx + 1) % this.state.drives.len().max(1);
                 this.select_drive(next_idx, cx);
@@ -282,8 +291,8 @@ impl Render for DscanApp {
         // Render context menu popup if active
         if let Some(ref menu) = self.context_menu {
             let node_id = menu.node_id;
-            let menu_w = 200.0;
-            let menu_h = 70.0;
+            let menu_w = 210.0;
+            let menu_h = 75.0;
             let x = menu.pos_x.min(avail_w - menu_w).max(8.0);
             let y = menu.pos_y.min(total_h - menu_h).max(8.0);
 
@@ -296,9 +305,9 @@ impl Render for DscanApp {
                     .w(px(menu_w))
                     .py(px(4.0))
                     .rounded_md()
-                    .bg(theme::SURFACE_DARK)
+                    .bg(t.surface)
                     .border_1()
-                    .border_color(theme::BORDER_LIGHT)
+                    .border_color(t.border_light)
                     .child(
                         div()
                             .id("ctx-reveal-btn")
@@ -306,11 +315,11 @@ impl Render for DscanApp {
                             .items_center()
                             .gap_2()
                             .px_3()
-                            .py(px(5.0))
+                            .py(px(6.0))
                             .cursor_pointer()
-                            .hover(|h| h.bg(theme::SURFACE_HOVER))
+                            .hover(move |h| h.bg(t.surface_hover))
                             .text_size(px(12.0))
-                            .text_color(theme::TEXT_PRIMARY)
+                            .text_color(t.text_primary)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _window, cx| {
@@ -326,11 +335,11 @@ impl Render for DscanApp {
                             .items_center()
                             .gap_2()
                             .px_3()
-                            .py(px(5.0))
+                            .py(px(6.0))
                             .cursor_pointer()
-                            .hover(|h| h.bg(theme::SURFACE_HOVER))
+                            .hover(move |h| h.bg(t.surface_hover))
                             .text_size(px(12.0))
-                            .text_color(theme::ACCENT_RED)
+                            .text_color(t.accent_red)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _window, cx| {
@@ -367,13 +376,13 @@ impl Render for DscanApp {
                         div()
                             .id("trash-confirm-modal")
                             .v_flex()
-                            .w(px(440.0))
+                            .w(px(460.0))
                             .p_6()
                             .gap_4()
                             .rounded_lg()
-                            .bg(theme::SURFACE_DARK)
+                            .bg(t.surface)
                             .border_1()
-                            .border_color(theme::BORDER_LIGHT)
+                            .border_color(t.border_light)
                             .child(
                                 div()
                                     .h_flex()
@@ -381,8 +390,8 @@ impl Render for DscanApp {
                                     .gap_2()
                                     .text_size(px(16.0))
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(theme::TEXT_PRIMARY)
-                                    .child(div().text_color(theme::ACCENT_RED).child("🗑"))
+                                    .text_color(t.text_primary)
+                                    .child(div().text_color(t.accent_red).child("🗑"))
                                     .child("Move to Trash?"),
                             )
                             .child(
@@ -390,7 +399,7 @@ impl Render for DscanApp {
                                     .v_flex()
                                     .gap_2()
                                     .text_size(px(12.0))
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(t.text_muted)
                                     .child(
                                         div()
                                             .h_flex()
@@ -404,7 +413,7 @@ impl Render for DscanApp {
                                             .child(
                                                 div()
                                                     .font_weight(FontWeight::BOLD)
-                                                    .text_color(theme::TEXT_PRIMARY)
+                                                    .text_color(t.text_primary)
                                                     .child(name),
                                             ),
                                     )
@@ -420,7 +429,7 @@ impl Render for DscanApp {
                                             )
                                             .child(
                                                 div()
-                                                    .text_color(theme::TEXT_DIM)
+                                                    .text_color(t.text_dim)
                                                     .text_size(px(11.0))
                                                     .child(path_str),
                                             ),
@@ -438,12 +447,12 @@ impl Render for DscanApp {
                                             .child(
                                                 div()
                                                     .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(theme::ACCENT_AMBER)
+                                                    .text_color(t.accent_amber)
                                                     .child(size_str),
                                             ),
                                     ),
                             )
-                            .when_some(err_opt, |d, err| {
+                            .when_some(err_opt, move |d, err| {
                                 d.child(
                                     div()
                                         .p_2()
@@ -455,8 +464,8 @@ impl Render for DscanApp {
                                             a: 0.2,
                                         })
                                         .border_1()
-                                        .border_color(theme::ACCENT_RED)
-                                        .text_color(theme::ACCENT_RED)
+                                        .border_color(t.accent_red)
+                                        .text_color(t.accent_red)
                                         .text_size(px(11.0))
                                         .child(format!("Error: {err}")),
                                 )
@@ -473,12 +482,12 @@ impl Render for DscanApp {
                                             .px_4()
                                             .py(px(6.0))
                                             .rounded_md()
-                                            .bg(theme::SURFACE_HOVER)
-                                            .hover(|h| h.bg(theme::BORDER_LIGHT))
+                                            .bg(t.surface_hover)
+                                            .hover(move |h| h.bg(t.border_light))
                                             .cursor_pointer()
                                             .text_size(px(12.0))
                                             .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme::TEXT_PRIMARY)
+                                            .text_color(t.text_primary)
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(|this, _, _window, cx| {
@@ -493,12 +502,17 @@ impl Render for DscanApp {
                                             .px_4()
                                             .py(px(6.0))
                                             .rounded_md()
-                                            .bg(theme::ACCENT_RED)
+                                            .bg(t.accent_red)
                                             .hover(|h| h.opacity(0.85))
                                             .cursor_pointer()
                                             .text_size(px(12.0))
                                             .font_weight(FontWeight::BOLD)
-                                            .text_color(theme::TEXT_PRIMARY)
+                                            .text_color(gpui::Rgba {
+                                                r: 1.0,
+                                                g: 1.0,
+                                                b: 1.0,
+                                                a: 1.0,
+                                            })
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(|this, _, _window, cx| {

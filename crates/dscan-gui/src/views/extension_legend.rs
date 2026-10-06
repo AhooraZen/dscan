@@ -10,35 +10,39 @@ use crate::theme;
 use dscan_core::format_bytes;
 
 pub fn render_extension_legend(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElement {
+    let t = app.theme();
+
     div()
         .id("extension-legend-pane")
         .v_flex()
         .size_full()
-        .bg(theme::BG_DARK)
+        .bg(t.bg)
         .child(
             // Legend Table Header
             div()
                 .h_flex()
                 .w_full()
-                .h(px(28.0))
+                .h(px(32.0))
                 .px_3()
-                .bg(theme::SURFACE_DARK)
+                .bg(t.surface)
                 .border_b_1()
-                .border_color(theme::BORDER_DARK)
-                .text_size(px(11.0))
+                .border_color(t.border)
+                .text_size(px(12.0))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme::TEXT_MUTED)
+                .text_color(t.text_muted)
                 .justify_between()
+                .items_center()
                 .child(
                     div()
                         .h_flex()
                         .gap_2()
+                        .items_center()
                         .child(div().w(px(16.0)).child(""))
-                        .child(div().w(px(80.0)).child("Extension")),
+                        .child(div().w(px(90.0)).child("Extension")),
                 )
-                .child(div().w(px(50.0)).text_right().child("Files"))
-                .child(div().w(px(70.0)).text_right().child("Bytes"))
-                .child(div().w(px(50.0)).text_right().child("%")),
+                .child(div().w(px(60.0)).text_right().child("Files"))
+                .child(div().w(px(80.0)).text_right().child("Bytes"))
+                .child(div().w(px(55.0)).text_right().child("%")),
         )
         .child(
             // Extensions list
@@ -56,7 +60,7 @@ pub fn render_extension_legend(app: &DscanApp, cx: &Context<DscanApp>) -> impl I
                             .items_center()
                             .justify_center()
                             .p_8()
-                            .text_color(theme::TEXT_DIM)
+                            .text_color(t.text_dim)
                             .text_size(px(12.0))
                             .child("No extension data yet"),
                     )
@@ -72,18 +76,17 @@ pub fn render_extension_legend(app: &DscanApp, cx: &Context<DscanApp>) -> impl I
                             .id(("ext-row", idx))
                             .h_flex()
                             .w_full()
-                            .h(px(22.0))
+                            .h(px(26.0))
                             .px_2()
                             .rounded_sm()
                             .cursor_pointer()
-                            .text_size(px(11.0))
+                            .text_size(px(12.0))
                             .when(is_active, |s| {
-                                s.bg(theme::SURFACE_HOVER)
-                                    .border_1()
-                                    .border_color(theme::ACCENT_BLUE)
+                                s.bg(t.surface_hover).border_1().border_color(t.accent_blue)
                             })
-                            .when(!is_active, |s| s.hover(|h| h.bg(theme::SURFACE_DARK)))
+                            .when(!is_active, |s| s.hover(|h| h.bg(t.surface)))
                             .justify_between()
+                            .items_center()
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _window, cx| {
@@ -95,38 +98,38 @@ pub fn render_extension_legend(app: &DscanApp, cx: &Context<DscanApp>) -> impl I
                                     .h_flex()
                                     .gap_2()
                                     .items_center()
-                                    .child(div().w(px(12.0)).h(px(12.0)).rounded_sm().bg(color))
+                                    .child(div().w(px(14.0)).h(px(14.0)).rounded_sm().bg(color))
                                     .child(
                                         div()
-                                            .w(px(80.0))
+                                            .w(px(90.0))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(if is_active {
-                                                theme::ACCENT_BLUE
+                                                t.accent_blue
                                             } else {
-                                                theme::TEXT_PRIMARY
+                                                t.text_primary
                                             })
                                             .child(ext.extension.clone()),
                                     ),
                             )
                             .child(
                                 div()
-                                    .w(px(50.0))
+                                    .w(px(60.0))
                                     .text_right()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(t.text_muted)
                                     .child(format!("{}", ext.file_count)),
                             )
                             .child(
                                 div()
-                                    .w(px(70.0))
+                                    .w(px(80.0))
                                     .text_right()
-                                    .text_color(theme::TEXT_MUTED)
+                                    .text_color(t.text_muted)
                                     .child(format_bytes(ext.total_bytes)),
                             )
                             .child(
                                 div()
-                                    .w(px(50.0))
+                                    .w(px(55.0))
                                     .text_right()
-                                    .text_color(theme::TEXT_DIM)
+                                    .text_color(t.text_dim)
                                     .child(format!("{:.1}%", ext.percentage_of_total)),
                             )
                     }))

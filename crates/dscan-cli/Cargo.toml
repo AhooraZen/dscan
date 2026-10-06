@@ -1,6 +1,6 @@
 [package]
 name = "dscan"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 authors = ["AhooraZen <ahoora935137@gmail.com>"]
 description = "Fast, zero-dependency multi-threaded disk usage analyzer for Linux and Windows"
@@ -19,4 +19,4 @@ name = "dscan"
 path = "src/main.rs"
 
 [dependencies]
-dscan-core = { version = "0.4.0", path = "../dscan-core" }
+dscan-core = { version = "0.4.1", path = "../dscan-core" }
