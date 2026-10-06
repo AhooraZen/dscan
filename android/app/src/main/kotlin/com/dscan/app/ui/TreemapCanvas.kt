@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import com.dscan.app.TreemapNode
 import kotlin.math.max
+import kotlin.math.min
 
 data class LayoutRect(
     val node: TreemapNode,
@@ -60,7 +61,7 @@ fun TreemapCanvas(
             val childIdSet = root.childrenIds.toSet()
             nodes.filter { childIdSet.contains(it.id) && it.totalBytes > 0 }
         } else {
-            nodes.filter { it.id != root.id && it.totalBytes > 0 }
+            nodes.filter { it.id != root.id && it.totalBytes > 0 && it.relDepth == 1 }
         }.sortedByDescending { it.totalBytes }
 
         if (children.isEmpty()) return@Canvas
@@ -119,6 +120,10 @@ fun TreemapCanvas(
     }
 }
 
+/**
+ * Squarified treemap layout (Bruls-Huizing-van Wijk).
+ * Items must be pre-sorted descending by totalBytes.
+ */
 private fun squarify(
     items: List<TreemapNode>,
     x: Float,
@@ -130,25 +135,79 @@ private fun squarify(
 ) {
     if (items.isEmpty() || w <= 0f || h <= 0f || totalWeight <= 0f) return
 
-    val isHorizontal = w >= h
-    var currentX = x
-    var currentY = y
+    // Area each item occupies in pixels
+    val totalArea = w * h
+    val areas = FloatArray(items.size) { (items[it].totalBytes.toFloat() / totalWeight) * totalArea }
 
-    // Slice and dice partitioning
-    items.forEach { item ->
-        val fraction = (item.totalBytes.toFloat() / totalWeight).coerceIn(0f, 1f)
-        if (isHorizontal) {
-            val itemWidth = w * fraction
-            if (itemWidth > 0.5f) {
-                outRects.add(LayoutRect(item, currentX, y, itemWidth, h))
-                currentX += itemWidth
+    var cx = x; var cy = y; var cw = w; var ch = h
+    var i = 0
+
+    while (i < items.size) {
+        val shortSide = min(cw, ch)
+        val row = mutableListOf<Int>()
+        var rowArea = 0f
+
+        // Greedily add items while worst aspect ratio improves
+        row.add(i)
+        rowArea += areas[i]
+        var bestWorst = worstAspect(row, areas, rowArea, shortSide)
+
+        var j = i + 1
+        while (j < items.size) {
+            val testArea = rowArea + areas[j]
+            row.add(j)
+            val testWorst = worstAspect(row, areas, testArea, shortSide)
+            if (testWorst > bestWorst) {
+                // Adding this item worsened ratio — remove and stop
+                row.removeAt(row.size - 1)
+                break
             }
-        } else {
-            val itemHeight = h * fraction
-            if (itemHeight > 0.5f) {
-                outRects.add(LayoutRect(item, x, currentY, w, itemHeight))
-                currentY += itemHeight
-            }
+            rowArea = testArea
+            bestWorst = testWorst
+            j++
         }
+
+        // Lay out this row along the short side
+        val layoutHorizontal = cw >= ch
+
+        if (layoutHorizontal) {
+            val actualRowWidth = (rowArea / ch).coerceIn(0f, cw)
+            var posY = cy
+            for (idx in row) {
+                val itemH = if (actualRowWidth > 0f) areas[idx] / actualRowWidth else 0f
+                outRects.add(LayoutRect(items[idx], cx, posY, actualRowWidth, itemH))
+                posY += itemH
+            }
+            cx += actualRowWidth
+            cw -= actualRowWidth
+        } else {
+            val actualRowHeight = (rowArea / cw).coerceIn(0f, ch)
+            var posX = cx
+            for (idx in row) {
+                val itemW = if (actualRowHeight > 0f) areas[idx] / actualRowHeight else 0f
+                outRects.add(LayoutRect(items[idx], posX, cy, itemW, actualRowHeight))
+                posX += itemW
+            }
+            cy += actualRowHeight
+            ch -= actualRowHeight
+        }
+
+        // Recalculate totalArea for remaining items
+        i = j.coerceAtLeast(i + row.size)
     }
+}
+
+/** Worst (max) aspect ratio in a row. Lower is better (1.0 = perfect square). */
+private fun worstAspect(row: List<Int>, areas: FloatArray, rowArea: Float, side: Float): Float {
+    if (rowArea <= 0f || side <= 0f) return Float.MAX_VALUE
+    val s2 = side * side
+    var worst = 0f
+    for (idx in row) {
+        val a = areas[idx]
+        // aspect = max(s²·a / rowArea², rowArea² / (s²·a))
+        val r1 = (s2 * a) / (rowArea * rowArea)
+        val r2 = (rowArea * rowArea) / (s2 * a)
+        worst = max(worst, max(r1, r2))
+    }
+    return worst
 }
