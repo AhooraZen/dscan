@@ -319,6 +319,32 @@ fn test_openat2_no_xdev_mount_boundary() {
 }
 
 #[test]
+fn test_normalize_scan_path_merges_curdir_and_bare() {
+    use dscan_core::normalize_scan_path;
+
+    assert_eq!(
+        normalize_scan_path(std::path::Path::new("./Downloads")),
+        std::path::PathBuf::from("Downloads")
+    );
+    assert_eq!(
+        normalize_scan_path(std::path::Path::new("Downloads")),
+        std::path::PathBuf::from("Downloads")
+    );
+    assert_eq!(
+        normalize_scan_path(std::path::Path::new("./.config")),
+        std::path::PathBuf::from(".config")
+    );
+    assert_eq!(
+        normalize_scan_path(std::path::Path::new(".config")),
+        std::path::PathBuf::from(".config")
+    );
+    assert_eq!(
+        normalize_scan_path(std::path::Path::new(".")),
+        std::path::PathBuf::from(".")
+    );
+}
+
+#[test]
 fn test_god_speed_synthetic_tree_matches_baseline() {
     let temp_dir = std::env::temp_dir().join(format!("dscan_god_speed_{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);

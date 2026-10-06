@@ -1,13 +1,13 @@
 [package]
 name = "dscan-gui"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 authors = ["AhooraZen <ahoora935137@gmail.com>"]
 description = "Native GPU-accelerated WinDirStat cushion treemap visualizer for dscan"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-dscan-core = { version = "0.4.2", path = "../dscan-core" }
+dscan-core = { version = "0.4.3", path = "../dscan-core" }
 gpui-kit = "0.7"
 open = "5.3"
 sysinfo = "0.33"

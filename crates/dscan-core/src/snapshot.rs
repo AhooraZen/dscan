@@ -81,7 +81,7 @@ impl ScanSession {
         let total_bytes = self.state.total_bytes.load(Ordering::Relaxed);
         let total_files = self.state.total_files.load(Ordering::Relaxed);
         let active_workers = self.state.active_workers.load(Ordering::Relaxed);
-        let is_complete = self.state.done.load(Ordering::Relaxed);
+        let is_complete = self.result.lock().unwrap().is_some();
         let current_path = self
             .state
             .current_active
@@ -131,7 +131,7 @@ impl ScanSession {
     }
 
     pub fn is_complete(&self) -> bool {
-        self.state.done.load(Ordering::Relaxed)
+        self.result.lock().unwrap().is_some()
     }
 
     pub fn wait_for_completion(&self) {
@@ -269,7 +269,16 @@ pub fn build_treemap_nodes(
 
     // 1. Insert hierarchical directory structure
     for (dir_path, dir_bytes) in top_dirs {
-        let Ok(rel) = dir_path.strip_prefix(root_path) else {
+        let rel_opt = if root_path == Path::new(".") || root_path.as_os_str().is_empty() {
+            Some(dir_path.as_path())
+        } else if let Ok(rel) = dir_path.strip_prefix(root_path) {
+            Some(rel)
+        } else if dir_path.is_relative() {
+            Some(dir_path.as_path())
+        } else {
+            None
+        };
+        let Some(rel) = rel_opt else {
             continue;
         };
         if rel.as_os_str().is_empty() {
@@ -322,7 +331,16 @@ pub fn build_treemap_nodes(
         if nodes.len() >= max_nodes {
             break;
         }
-        let Ok(rel) = file_path.strip_prefix(root_path) else {
+        let rel_opt = if root_path == Path::new(".") || root_path.as_os_str().is_empty() {
+            Some(file_path.as_path())
+        } else if let Ok(rel) = file_path.strip_prefix(root_path) {
+            Some(rel)
+        } else if file_path.is_relative() {
+            Some(file_path.as_path())
+        } else {
+            None
+        };
+        let Some(rel) = rel_opt else {
             continue;
         };
         let parent_rel = rel.parent().unwrap_or(Path::new(""));
@@ -517,5 +535,35 @@ mod tests {
         assert!(!exts.is_empty());
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_build_treemap_nodes_relative_root_dot() {
+        let root = Path::new(".");
+        let top_dirs = vec![
+            (PathBuf::from("Downloads"), 1000),
+            (PathBuf::from("Downloads/Programs"), 600),
+            (PathBuf::from(".config"), 500),
+        ];
+        let top_files = vec![
+            (400, PathBuf::from("Downloads/file.iso")),
+            (200, PathBuf::from("test.txt")),
+        ];
+
+        let nodes = build_treemap_nodes(root, &top_dirs, &top_files, 1500, 5, 50);
+        assert!(
+            nodes.len() > 1,
+            "Should build nodes under relative root '.' without dropping"
+        );
+        assert_eq!(nodes[0].name, ".");
+        // Children of root should include Downloads, .config, test.txt
+        let root_children: Vec<&str> = nodes[0]
+            .children_ids
+            .iter()
+            .map(|&id| nodes[id as usize].name.as_str())
+            .collect();
+        assert!(root_children.contains(&"Downloads"));
+        assert!(root_children.contains(&".config"));
+        assert!(root_children.contains(&"test.txt"));
     }
 }

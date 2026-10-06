@@ -502,6 +502,22 @@ pub fn extract_file_extension(name_bytes: &[u8]) -> String {
     "[no ext]".to_string()
 }
 
+/// Strip redundant CurDir (`.`) components so `./foo` and `foo` normalize to `foo`.
+pub fn normalize_scan_path(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => continue,
+            _ => out.push(c),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        out
+    }
+}
+
 #[inline(always)]
 fn record_file_ext(
     ext_stats: &mut std::collections::HashMap<String, (u64, u64)>,
@@ -1791,7 +1807,7 @@ pub fn execute_workers_and_rollup(
 ) -> ScanResult {
     let num_threads = workers.len();
     let start_time = Instant::now();
-    let base_depth = root.components().count();
+    let _base_depth = root.components().count();
 
     // Spawn progress reporter if callback provided
     let rep_handle = if let Some(cb) = progress_cb {
@@ -1858,7 +1874,8 @@ pub fn execute_workers_and_rollup(
             entry.1 += v.1;
         }
         for (k, v) in res.dir_sizes {
-            all_dirs.push((k, v));
+            let norm_k = normalize_scan_path(&k);
+            all_dirs.push((norm_k, v));
         }
         if options.top_limit > 0 {
             for Reverse(cand) in res.top_files.heap {
@@ -1884,8 +1901,10 @@ pub fn execute_workers_and_rollup(
         *dir_map.entry(path).or_default() += direct_sz;
     }
 
-    // 2. Ensure root path exists in dir_map
-    dir_map.entry(root.to_path_buf()).or_default();
+    // 2. Ensure normalized root path exists in dir_map
+    let norm_root = normalize_scan_path(root);
+    let norm_base_depth = norm_root.components().count();
+    dir_map.entry(norm_root.clone()).or_default();
 
     // Ensure all intermediate ancestors up to root exist in dir_map
     let initial_paths: Vec<PathBuf> = dir_map.keys().cloned().collect();
@@ -1895,11 +1914,11 @@ pub fn execute_workers_and_rollup(
             if parent.as_os_str().is_empty() || parent == curr {
                 break;
             }
-            if parent.components().count() < base_depth {
+            if parent.components().count() < norm_base_depth {
                 break;
             }
             dir_map.entry(parent.to_path_buf()).or_default();
-            if parent == root {
+            if parent == norm_root {
                 break;
             }
             curr = parent;
@@ -1912,7 +1931,7 @@ pub fn execute_workers_and_rollup(
 
     // 4. Single-pass bottom-up rollup: each directory adds its accumulated total ONLY to its immediate parent
     for dir in paths_by_depth {
-        if dir == root {
+        if dir == norm_root {
             continue;
         }
         let child_total = dir_map.get(&dir).copied().unwrap_or(0);
@@ -1923,8 +1942,8 @@ pub fn execute_workers_and_rollup(
         let parent_opt = match dir.parent() {
             Some(p) if !p.as_os_str().is_empty() => Some(p.to_path_buf()),
             _ => {
-                if root != Path::new("") && dir != root {
-                    Some(root.to_path_buf())
+                if norm_root != Path::new("") && dir != norm_root {
+                    Some(norm_root.clone())
                 } else {
                     None
                 }
@@ -1943,7 +1962,7 @@ pub fn execute_workers_and_rollup(
     let mut sorted_dirs: Vec<(PathBuf, u64)> = dir_map
         .into_iter()
         .filter(|(p, _)| {
-            let d = p.components().count().saturating_sub(base_depth);
+            let d = p.components().count().saturating_sub(norm_base_depth);
             d <= max_depth
         })
         .collect();
@@ -1961,7 +1980,8 @@ pub fn execute_workers_and_rollup(
         let pb = PathBuf::from(std::ffi::OsStr::from_bytes(&path_buf));
         #[cfg(windows)]
         let pb = PathBuf::from(String::from_utf8_lossy(&path_buf).as_ref());
-        files_vec.push((cand.size, pb));
+        let norm_pb = normalize_scan_path(&pb);
+        files_vec.push((cand.size, norm_pb));
     }
 
     files_vec.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
