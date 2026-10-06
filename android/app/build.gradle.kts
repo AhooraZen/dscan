@@ -12,8 +12,8 @@ android {
         applicationId = "com.dscan.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 44
-        versionName = "0.4.4"
+        versionCode = 60
+        versionName = "0.6.0"
 
         ndk {
             abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
