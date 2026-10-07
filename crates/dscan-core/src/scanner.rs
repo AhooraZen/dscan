@@ -100,6 +100,7 @@ impl ScanOptions {
 
         #[cfg(target_os = "android")]
         {
+            let _ = path;
             (cores * 2).clamp(4, 16)
         }
         #[cfg(not(target_os = "android"))]
@@ -745,7 +746,7 @@ fn scan_directory_tree(
                         sub_dirs.push(name_bytes.to_vec());
                     }
                     DT_REG => {
-                        #[cfg(target_os = "linux")]
+                        #[cfg(any(target_os = "linux", target_os = "android"))]
                         {
                             let mut kstat = crate::sys::KernelStat::default();
                             let path_c =
@@ -770,100 +771,7 @@ fn scan_directory_tree(
                             }
                         }
 
-                        #[cfg(not(target_os = "linux"))]
-                        if let Some(b) = batcher.as_mut() {
-                            if name_bytes.len() < 255 {
-                                let idx = batch.count;
-                                batch.name_bufs[idx][..name_bytes.len()]
-                                    .copy_from_slice(name_bytes);
-                                batch.name_bufs[idx][name_bytes.len()] = 0;
-                                batch.name_lens[idx] = name_bytes.len();
-                                batch.statx_bufs[idx] = crate::sys::Statx::default();
-
-                                b.prep_statx(
-                                    idx as u64,
-                                    fd,
-                                    batch.name_bufs[idx].as_ptr() as *const std::ffi::c_char,
-                                    AT_SYMLINK_NOFOLLOW | AT_STATX_DONT_SYNC,
-                                    STATX_BLOCKS,
-                                    &mut batch.statx_bufs[idx],
-                                );
-                                batch.count += 1;
-
-                                if batch.count == BATCH_CAP {
-                                    flush_statx_batch(
-                                        b,
-                                        batch,
-                                        current_node,
-                                        &mut local_dir_size,
-                                        local_files,
-                                        local_bytes,
-                                        local_top_files,
-                                        local_ext_stats,
-                                        local_arena,
-                                        state,
-                                    );
-                                }
-                            } else {
-                                // Fallback for very long filenames (>254 bytes)
-                                let mut stx = crate::sys::Statx::default();
-                                let mut long_c = name_bytes.to_vec();
-                                long_c.push(0);
-                                let res = crate::sys::sys_statx(
-                                    fd,
-                                    long_c.as_ptr() as *const std::ffi::c_char,
-                                    AT_SYMLINK_NOFOLLOW | AT_STATX_DONT_SYNC,
-                                    STATX_BLOCKS,
-                                    &mut stx,
-                                );
-                                if res == 0 {
-                                    let sz = stx.stx_blocks * 512;
-                                    local_dir_size += sz;
-                                    record_file_stat(local_files, local_bytes, sz, state);
-                                    local_top_files.push(sz, current_node, name_bytes, local_arena);
-                                    record_file_ext(
-                                        local_ext_stats,
-                                        name_bytes,
-                                        sz,
-                                        state.config.collect_ext_stats,
-                                    );
-                                }
-                            }
-                        } else {
-                            let mut stx = crate::sys::Statx::default();
-                            let mut name_c = [0u8; 256];
-                            let path_c = if name_bytes.len() < 255 {
-                                name_c[..name_bytes.len()].copy_from_slice(name_bytes);
-                                name_c[name_bytes.len()] = 0;
-                                name_c.as_ptr() as *const std::ffi::c_char
-                            } else {
-                                let mut long_c = name_bytes.to_vec();
-                                long_c.push(0);
-                                long_c.as_ptr() as *const std::ffi::c_char
-                            };
-
-                            let res = crate::sys::sys_statx(
-                                fd,
-                                path_c,
-                                AT_SYMLINK_NOFOLLOW | AT_STATX_DONT_SYNC,
-                                STATX_BLOCKS,
-                                &mut stx,
-                            );
-                            if res == 0 {
-                                let sz = stx.stx_blocks * 512;
-                                local_dir_size += sz;
-                                record_file_stat(local_files, local_bytes, sz, state);
-                                local_top_files.push(sz, current_node, name_bytes, local_arena);
-                                record_file_ext(
-                                    local_ext_stats,
-                                    name_bytes,
-                                    sz,
-                                    state.config.collect_ext_stats,
-                                );
-                            }
-                        }
-
-                        #[cfg(not(target_os = "linux"))]
+                        #[cfg(not(any(target_os = "linux", target_os = "android")))]
                         {
                             let mut stx = crate::sys::Statx::default();
                             let path_c =
