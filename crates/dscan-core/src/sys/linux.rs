@@ -24,6 +24,32 @@ pub const SYS_STATX: i64 = 383;
 pub const SYS_STATX: i64 = 332;
 
 #[cfg(target_arch = "x86_64")]
+pub const SYS_NEWFSTATAT: i64 = 262;
+
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "loongarch64"
+))]
+pub const SYS_NEWFSTATAT: i64 = 79;
+
+#[cfg(target_arch = "arm")]
+pub const SYS_NEWFSTATAT: i64 = 327;
+
+#[cfg(target_arch = "x86")]
+pub const SYS_NEWFSTATAT: i64 = 300;
+
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "loongarch64",
+    target_arch = "arm",
+    target_arch = "x86"
+)))]
+pub const SYS_NEWFSTATAT: i64 = 262;
+
+#[cfg(target_arch = "x86_64")]
 pub const SYS_GETDENTS64: i64 = 217;
 
 #[cfg(any(
@@ -228,6 +254,11 @@ pub fn is_rotational_device(dev: u64) -> bool {
     let major = dev_major(dev);
     let minor = dev_minor(dev);
 
+    // VirtIO block devices (major 252/253/254) and NVMe (major 259) are solid-state/virtual
+    if major == 259 || (251..=254).contains(&major) {
+        return false;
+    }
+
     // 1. Check direct device path (e.g. whole disk)
     let p1 = format!("/sys/dev/block/{}:{}/queue/rotational", major, minor);
     if let Ok(content) = std::fs::read_to_string(&p1) {
@@ -241,6 +272,48 @@ pub fn is_rotational_device(dev: u64) -> bool {
     }
 
     false
+}
+
+#[repr(C)]
+#[derive(Default, Copy, Clone, Debug)]
+pub struct KernelStat {
+    pub st_dev: u64,
+    pub st_ino: u64,
+    pub st_nlink: u64,
+    pub st_mode: u32,
+    pub st_uid: u32,
+    pub st_gid: u32,
+    pub __pad0: u32,
+    pub st_rdev: u64,
+    pub st_size: i64,
+    pub st_blksize: i64,
+    pub st_blocks: i64,
+    pub st_atime: i64,
+    pub st_atime_nsec: i64,
+    pub st_mtime: i64,
+    pub st_mtime_nsec: i64,
+    pub st_ctime: i64,
+    pub st_ctime_nsec: i64,
+    pub __glibc_reserved: [i64; 3],
+}
+
+/// Issue raw newfstatat syscall.
+#[inline(always)]
+pub fn sys_newfstatat(
+    dirfd: i32,
+    pathname: *const std::ffi::c_char,
+    flags: i32,
+    statbuf: &mut KernelStat,
+) -> i32 {
+    unsafe {
+        syscall(
+            SYS_NEWFSTATAT,
+            dirfd as i64,
+            pathname as i64,
+            statbuf as *mut KernelStat as i64,
+            flags as i64,
+        ) as i32
+    }
 }
 
 /// Issue raw statx syscall.

@@ -106,7 +106,7 @@ impl ScanOptions {
         {
             let dev = get_path_dev(path);
             if crate::sys::is_rotational(dev, path) {
-                cores.clamp(2, 4)
+                cores.clamp(4, 8)
             } else {
                 (cores * 4).clamp(8, 64)
             }
@@ -638,8 +638,10 @@ fn scan_directory_tree(
     let matcher = &state.config.matcher;
 
     let dir_bytes = dir_path.as_os_str().as_bytes();
-    path_stack.clear();
-    path_stack.extend_from_slice(dir_bytes);
+    if path_stack.as_slice() != dir_bytes {
+        path_stack.clear();
+        path_stack.extend_from_slice(dir_bytes);
+    }
 
     let (fd_opt, need_dev_check) = if let Some(fd) = dir_fd {
         (Some(fd), false)
@@ -744,6 +746,31 @@ fn scan_directory_tree(
                     }
                     DT_REG => {
                         #[cfg(target_os = "linux")]
+                        {
+                            let mut kstat = crate::sys::KernelStat::default();
+                            let path_c =
+                                buf_slice[name_start..].as_ptr() as *const std::ffi::c_char;
+                            let res = crate::sys::sys_newfstatat(
+                                fd,
+                                path_c,
+                                AT_SYMLINK_NOFOLLOW,
+                                &mut kstat,
+                            );
+                            if res == 0 {
+                                let sz = (kstat.st_blocks as u64) * 512;
+                                local_dir_size += sz;
+                                record_file_stat(local_files, local_bytes, sz, state);
+                                local_top_files.push(sz, current_node, name_bytes, local_arena);
+                                record_file_ext(
+                                    local_ext_stats,
+                                    name_bytes,
+                                    sz,
+                                    state.config.collect_ext_stats,
+                                );
+                            }
+                        }
+
+                        #[cfg(not(target_os = "linux"))]
                         if let Some(b) = batcher.as_mut() {
                             if name_bytes.len() < 255 {
                                 let idx = batch.count;

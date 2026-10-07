@@ -244,8 +244,7 @@ fn strip_root_prefix<'a>(path: &'a Path, root: &Path) -> Option<std::borrow::Cow
     let trimmed_root = root_str.trim_end_matches(['/', '\\']);
     if !trimmed_root.is_empty() {
         let path_str = path.to_string_lossy();
-        if path_str.starts_with(trimmed_root) {
-            let rest = &path_str[trimmed_root.len()..];
+        if let Some(rest) = path_str.strip_prefix(trimmed_root) {
             let trimmed_rest = rest.trim_start_matches(['/', '\\']);
             let normalized = trimmed_rest.replace('\\', "/");
             return Some(std::borrow::Cow::Owned(PathBuf::from(normalized)));
@@ -496,9 +495,7 @@ mod tests {
             (PathBuf::from("C:\\Windows"), 500_000),
             (PathBuf::from("C:\\Users\\User"), 1_000_000),
         ];
-        let top_files = vec![
-            (800_000, PathBuf::from("C:\\Users\\User\\file.iso")),
-        ];
+        let top_files = vec![(800_000, PathBuf::from("C:\\Users\\User\\file.iso"))];
 
         let nodes = build_treemap_nodes(&root, &top_dirs, &top_files, 1_500_000, 4, 100);
         assert!(!nodes.is_empty());

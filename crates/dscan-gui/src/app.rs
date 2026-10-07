@@ -65,6 +65,27 @@ impl DscanApp {
         cx.notify();
     }
 
+    pub fn open_folder_picker(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Select Directory to Scan".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = receiver.await {
+                if let Some(first) = paths.into_iter().next() {
+                    let _ = this.update(cx, |this, cx| {
+                        this.state.target_path = first.clone();
+                        this.threads = dscan_core::ScanOptions::auto_threads_for_path(&first);
+                        this.start_scan(cx);
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
     pub fn start_scan(&mut self, cx: &mut Context<Self>) {
         let target = self.state.target_path.clone();
         self.threads =
@@ -175,16 +196,25 @@ impl DscanApp {
         self.close_context_menu(cx);
     }
 
+    pub fn copy_node_path(&mut self, node_id: u32, cx: &mut Context<Self>) {
+        let path = self.state.node_full_path(node_id);
+        let path_str = path.to_string_lossy().to_string();
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(path_str));
+        self.close_context_menu(cx);
+    }
+
     pub fn request_trash_node(&mut self, node_id: u32, cx: &mut Context<Self>) {
         self.context_menu = None;
         if let Some(node) = self.state.find_node(node_id) {
             let path = self.state.node_full_path(node_id);
+            let safety_check = crate::system::is_safe_to_trash(&path, &self.state.target_path);
+            let error_msg = safety_check.err().map(|e| e.to_string());
             self.pending_trash = Some(PendingTrash {
                 node_id,
                 name: node.name.clone(),
                 total_bytes: node.total_bytes,
                 path,
-                error_msg: None,
+                error_msg,
             });
             cx.notify();
         }
@@ -249,8 +279,7 @@ impl Render for DscanApp {
             .bg(t.bg)
             .text_color(t.text_primary)
             .on_action(cx.listener(|this, _: &OpenPath, _window, cx| {
-                let next_idx = (this.state.selected_drive_idx + 1) % this.state.drives.len().max(1);
-                this.select_drive(next_idx, cx);
+                this.open_folder_picker(cx);
             }))
             .on_action(cx.listener(|this, _: &TogglePause, _window, cx| {
                 if this.state.is_scanning {
@@ -264,7 +293,11 @@ impl Render for DscanApp {
                 }
             }))
             .on_action(cx.listener(|this, _: &CancelScan, _window, cx| {
-                if this.state.is_scanning {
+                if this.pending_trash.is_some() {
+                    this.cancel_trash(cx);
+                } else if this.context_menu.is_some() {
+                    this.close_context_menu(cx);
+                } else if this.state.is_scanning {
                     this.cancel_scan(cx);
                 }
             }))
@@ -293,10 +326,45 @@ impl Render for DscanApp {
         // Render context menu popup if active
         if let Some(ref menu) = self.context_menu {
             let node_id = menu.node_id;
-            let menu_w = 220.0;
-            let menu_h = 84.0;
+            let path = self.state.node_full_path(node_id);
+            let is_safe = crate::system::is_safe_to_trash(&path, &self.state.target_path).is_ok();
+            let menu_w = 230.0;
+            let menu_h = 136.0;
             let x = menu.pos_x.min(avail_w - menu_w).max(8.0);
             let y = menu.pos_y.min(total_h - menu_h).max(8.0);
+
+            let trash_btn = if is_safe {
+                let on_trash = cx.listener(move |this, _, _window, cx| {
+                    this.request_trash_node(node_id, cx);
+                });
+                div()
+                    .id("ctx-trash-btn")
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(move |h| h.bg(t.surface_hover))
+                    .text_size(px(13.0))
+                    .text_color(t.accent_red)
+                    .on_mouse_down(MouseButton::Left, on_trash)
+                    .child("🗑 Move to Trash")
+            } else {
+                div()
+                    .id("ctx-trash-btn")
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .rounded_md()
+                    .opacity(0.4)
+                    .text_size(px(13.0))
+                    .text_color(t.text_dim)
+                    .child("🗑 Move to Trash (Protected)")
+            };
 
             root = root.child(
                 div()
@@ -333,7 +401,7 @@ impl Render for DscanApp {
                     )
                     .child(
                         div()
-                            .id("ctx-trash-btn")
+                            .id("ctx-copy-btn")
                             .h_flex()
                             .items_center()
                             .gap_2()
@@ -343,15 +411,17 @@ impl Render for DscanApp {
                             .rounded_md()
                             .hover(move |h| h.bg(t.surface_hover))
                             .text_size(px(13.0))
-                            .text_color(t.accent_red)
+                            .text_color(t.text_primary)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _window, cx| {
-                                    this.request_trash_node(node_id, cx);
+                                    this.copy_node_path(node_id, cx);
                                 }),
                             )
-                            .child("🗑 Move to Trash"),
-                    ),
+                            .child("📋 Copy Path"),
+                    )
+                    .child(div().h(px(1.0)).bg(t.border_light).my(px(4.0)).mx(px(6.0)))
+                    .child(trash_btn),
             );
         }
 
@@ -361,6 +431,7 @@ impl Render for DscanApp {
             let path_str = pending.path.to_string_lossy().to_string();
             let size_str = dscan_core::format_bytes(pending.total_bytes);
             let err_opt = pending.error_msg.clone();
+            let has_error = err_opt.is_some();
 
             root = root.child(
                 div()
@@ -498,33 +569,35 @@ impl Render for DscanApp {
                                                     this.cancel_trash(cx);
                                                 }),
                                             )
-                                            .child("Cancel"),
+                                            .child(if has_error { "Dismiss" } else { "Cancel" }),
                                     )
-                                    .child(
-                                        div()
-                                            .id("confirm-trash-btn")
-                                            .px(px(16.0))
-                                            .py(px(8.0))
-                                            .rounded_lg()
-                                            .bg(t.accent_red)
-                                            .hover(|h| h.opacity(0.85))
-                                            .cursor_pointer()
-                                            .text_size(px(13.0))
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(gpui::Rgba {
-                                                r: 1.0,
-                                                g: 1.0,
-                                                b: 1.0,
-                                                a: 1.0,
-                                            })
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _window, cx| {
-                                                    this.confirm_trash(cx);
-                                                }),
-                                            )
-                                            .child("Move to Trash"),
-                                    ),
+                                    .when(!has_error, |s| {
+                                        s.child(
+                                            div()
+                                                .id("confirm-trash-btn")
+                                                .px(px(16.0))
+                                                .py(px(8.0))
+                                                .rounded_lg()
+                                                .bg(t.accent_red)
+                                                .hover(|h| h.opacity(0.85))
+                                                .cursor_pointer()
+                                                .text_size(px(13.0))
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(gpui::Rgba {
+                                                    r: 1.0,
+                                                    g: 1.0,
+                                                    b: 1.0,
+                                                    a: 1.0,
+                                                })
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, _window, cx| {
+                                                        this.confirm_trash(cx);
+                                                    }),
+                                                )
+                                                .child("Move to Trash"),
+                                        )
+                                    }),
                             ),
                     ),
             );

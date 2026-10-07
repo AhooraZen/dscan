@@ -58,19 +58,54 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                     div()
                         .h_flex()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(px(8.0))
                         .child(
                             div()
+                                .id("btn-browse-folder")
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
+                                .px(px(10.0))
+                                .py(px(5.0))
+                                .rounded_md()
+                                .bg(t.surface_hover)
+                                .hover(move |h| h.bg(t.border_light))
+                                .cursor_pointer()
                                 .text_size(px(12.0))
-                                .text_color(t.text_dim)
-                                .child("Target:"),
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(t.text_primary)
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _window, cx| {
+                                        this.open_folder_picker(cx);
+                                    }),
+                                )
+                                .child("📂 Browse"),
                         )
                         .child(
                             div()
-                                .text_size(px(13.0))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(t.text_primary)
-                                .child(app.state.target_path.to_string_lossy().to_string()),
+                                .h_flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .px(px(10.0))
+                                .py(px(4.0))
+                                .rounded_md()
+                                .bg(t.bg)
+                                .border_1()
+                                .border_color(t.border)
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(t.text_dim)
+                                        .child("Target:"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(13.0))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(t.text_primary)
+                                        .child(app.state.target_path.to_string_lossy().to_string()),
+                                ),
                         ),
                 ),
         )
@@ -82,8 +117,7 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                 .gap(px(6.0))
                 .overflow_x_hidden()
                 .max_w(px(480.0))
-                .children(
-                app.state.drives.iter().enumerate().map(|(idx, drive)| {
+                .children(app.state.drives.iter().enumerate().map(|(idx, drive)| {
                     let is_selected = idx == app.state.selected_drive_idx;
                     let mount_str = drive.mount_point.to_string_lossy().to_string();
                     let used_pct = drive.used_percentage();
@@ -120,8 +154,7 @@ pub fn render_title_bar(app: &DscanApp, cx: &Context<DscanApp>) -> impl IntoElem
                             }),
                         )
                         .child(label)
-                }),
-            ),
+                })),
         )
         .child(
             // Right scan controls & Theme Toggle

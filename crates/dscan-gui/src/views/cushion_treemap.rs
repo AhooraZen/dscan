@@ -55,6 +55,7 @@ pub fn render_cushion_treemap(app: &DscanApp, cx: &Context<DscanApp>) -> impl In
                 let px_x: f32 = event.position.x.into();
                 let px_y: f32 = event.position.y.into();
                 if let Some(id) = this.state.hit_test(px_x, px_y) {
+                    this.select_node(id, cx);
                     this.open_context_menu(id, px_x, px_y, cx);
                 }
             }),

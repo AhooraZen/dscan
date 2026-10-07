@@ -1,11 +1,11 @@
 package com.dscan.app.ui
 
-import android.view.HapticFeedbackConstants
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -15,7 +15,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dscan.app.ExtensionStat
 import com.dscan.app.ScanProgress
@@ -37,8 +38,6 @@ fun MainScreen(
     modifier: Modifier = Modifier
 ) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    var selectedNode by remember { mutableStateOf<TreemapNode?>(null) }
-    val view = LocalView.current
 
     Scaffold(
         topBar = {
@@ -46,16 +45,23 @@ fun MainScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "dscan",
-                            style = MaterialTheme.typography.titleLarge,
+                            "⚡ dscan",
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.primary
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            "Disk Space Analyzer",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp)
+                        ) {
+                            Text(
+                                "v0.7.0",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -71,9 +77,10 @@ fun MainScreen(
         bottomBar = {
             NavigationBar {
                 val items = listOf(
-                    Triple("Treemap", Icons.Default.GridView, 0),
-                    Triple("Directory", Icons.Default.FolderOpen, 1),
-                    Triple("File Types", Icons.Default.PieChart, 2)
+                    Triple("Overview", Icons.Default.Dashboard, 0),
+                    Triple("Explorer", Icons.Default.Folder, 1),
+                    Triple("Top Files", Icons.Default.Leaderboard, 2),
+                    Triple("File Types", Icons.Default.PieChart, 3)
                 )
                 items.forEach { (label, icon, index) ->
                     NavigationBarItem(
@@ -129,59 +136,33 @@ fun MainScreen(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 FilledTonalButton(onClick = onBrowseFolder) {
-                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(
+                        Icons.Default.FolderOpen,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Browse")
                 }
             }
 
-            // Scanning gauge or progress stats
-            AnimatedContent(
-                targetState = isScanning,
-                transitionSpec = {
-                    fadeIn() + slideInVertically() togetherWith fadeOut() + slideOutVertically()
-                },
-                label = "scan_state"
-            ) { scanning ->
-                if (scanning) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        ScanGauge(progress = progress, modifier = Modifier.padding(8.dp))
-                    }
-                } else if (progress.totalFiles > 0) {
-                    // Compact stats after scan
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                "Total: ${formatBytes(progress.totalBytes)}",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                "${progress.totalFiles} files  •  ${progress.elapsedMillis}ms",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+            // Scanning progress gauge
+            AnimatedVisibility(
+                visible = isScanning,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    ScanGauge(progress = progress, modifier = Modifier.padding(8.dp))
                 }
             }
 
-            // Content Area
+            // Content Area with Animated Tabs
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -190,75 +171,29 @@ fun MainScreen(
                 AnimatedContent(
                     targetState = selectedTab,
                     transitionSpec = {
-                        fadeIn() + slideInHorizontally { if (targetState > initialState) it / 4 else -it / 4 } togetherWith
-                                fadeOut() + slideOutHorizontally { if (targetState > initialState) -it / 4 else it / 4 }
+                        fadeIn() + slideInHorizontally { if (targetState > initialState) it / 5 else -it / 5 } togetherWith
+                                fadeOut() + slideOutHorizontally { if (targetState > initialState) -it / 5 else it / 5 }
                     },
-                    label = "tab"
+                    label = "tab_switch"
                 ) { tab ->
                     when (tab) {
-                        0 -> {
-                            if (treemapNodes.isEmpty()) {
-                                Box(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        if (isScanning) "Building treemap..." else "Tap Scan to visualize disk space",
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            } else {
-                                Column(modifier = Modifier.fillMaxSize()) {
-                                    if (selectedNode != null) {
-                                        Surface(
-                                            color = MaterialTheme.colorScheme.surfaceVariant,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(
-                                                    "${selectedNode?.name} (${formatBytes(selectedNode?.totalBytes ?: 0)})",
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                                IconButton(onClick = { selectedNode = null }) {
-                                                    Icon(Icons.Default.Close, contentDescription = "Deselect")
-                                                }
-                                            }
-                                        }
-                                    }
-                                    TreemapCanvas(
-                                        nodes = treemapNodes,
-                                        selectedNode = selectedNode,
-                                        onNodeSelected = {
-                                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                                            selectedNode = it
-                                        },
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    // Color legend
-                                    ColorLegend(
-                                        extensionStats = extensionStats,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-                        }
-                        1 -> {
-                            DirectoryList(
-                                nodes = treemapNodes,
-                                selectedNode = selectedNode,
-                                onNodeClick = {
-                                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                                    selectedNode = it
-                                }
-                            )
-                        }
-                        2 -> {
-                            ExtensionBreakdownList(stats = extensionStats)
-                        }
+                        0 -> OverviewDashboard(
+                            progress = progress,
+                            nodes = treemapNodes,
+                            extensionStats = extensionStats,
+                            isScanning = isScanning,
+                            onExploreClick = { selectedTab = 1 },
+                            onTopFilesClick = { selectedTab = 2 }
+                        )
+                        1 -> DirectoryExplorer(
+                            nodes = treemapNodes
+                        )
+                        2 -> StorageHogsList(
+                            nodes = treemapNodes
+                        )
+                        3 -> ExtensionBreakdownList(
+                            stats = extensionStats
+                        )
                     }
                 }
             }
@@ -266,32 +201,333 @@ fun MainScreen(
     }
 }
 
+/**
+ * Modern Storage Overview Dashboard tab.
+ */
 @Composable
-fun ColorLegend(
+fun OverviewDashboard(
+    progress: ScanProgress,
+    nodes: List<TreemapNode>,
     extensionStats: List<ExtensionStat>,
+    isScanning: Boolean,
+    onExploreClick: () -> Unit,
+    onTopFilesClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    if (extensionStats.isEmpty()) return
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        extensionStats.take(12).forEach { stat ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(getExtensionColor(stat.extension))
+    if (nodes.isEmpty() && !isScanning && progress.totalFiles == 0L) {
+        Box(
+            modifier = modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(32.dp)
+            ) {
+                Icon(
+                    Icons.Default.Storage,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                 )
-                Spacer(modifier = Modifier.width(3.dp))
+                Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = stat.extension.ifEmpty { "?" },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    "Ready to Analyze Storage",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
                 )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    "Select a folder and tap Scan to discover space hogs with direct kernel throughput.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+        return
+    }
+
+    val totalBytes = remember(progress, nodes) {
+        if (progress.totalBytes > 0) progress.totalBytes
+        else nodes.firstOrNull()?.totalBytes ?: 0L
+    }
+
+    val topFiles = remember(nodes) {
+        nodes.filter { !it.isDir && it.relDepth > 0 }.sortedByDescending { it.totalBytes }.take(3)
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Hero Card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Text(
+                        "Total Storage Scanned",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        formatBytes(totalBytes),
+                        style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.ExtraBold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text(
+                                "${progress.totalFiles} files",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                "Indexed",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Column {
+                            Text(
+                                "${progress.elapsedMillis} ms",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                "Duration",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Column {
+                            val rateStr = if (progress.filesPerSec > 0) "${progress.filesPerSec.toInt()}/s" else "-"
+                            Text(
+                                rateStr,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                "Throughput",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Storage Distribution Preview
+        if (extensionStats.isNotEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            "Top File Categories",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Category proportional bars
+                        extensionStats.take(5).forEach { stat ->
+                            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(10.dp)
+                                                .clip(CircleShape)
+                                                .background(getExtensionColor(stat.extension))
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = if (stat.extension.isEmpty()) "[no extension]" else ".${stat.extension}",
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                    }
+                                    Text(
+                                        text = "${formatBytes(stat.totalBytes)} (${String.format("%.1f%%", stat.percentage)})",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                LinearProgressIndicator(
+                                    progress = { (stat.percentage / 100f).coerceIn(0f, 1f) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(4.dp)
+                                        .clip(RoundedCornerShape(2.dp)),
+                                    color = getExtensionColor(stat.extension),
+                                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Top 3 Space Hogs Snapshot
+        if (topFiles.isNotEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Largest Files",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            TextButton(onClick = onTopFilesClick) {
+                                Text("View All")
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        topFiles.forEachIndexed { index, file ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "#${index + 1}",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        file.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Text(
+                                    formatBytes(file.totalBytes),
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Quick Action Shortcuts
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedCard(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onExploreClick() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Folder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                "Explore",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                "Browse folders",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                OutlinedCard(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onTopFilesClick() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Leaderboard,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                "Storage Hogs",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                "Find large files",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
             }
         }
     }

@@ -104,12 +104,13 @@ Android disk analyzer powered by the same Rust scanner through JNI, with a Jetpa
 
 - **Rust JNI engine**: `dscan-core` compiled as `libdscan.so` (ARM64). Runs `getdents64` and `statx` on Android kernel.
 - **Animated circular gauge**: Real-time progress ring with bytes scanned, files per second, and file count.
-- **Squarified treemap**: Bruls-Huizing-van Wijk algorithm for clean rectangular layouts instead of thin strips. Tap any tile for details, with haptic feedback.
+- **Storage dashboard**: Instant space breakdown with throughput metrics, elapsed duration, and top file categories.
+- **Directory explorer**: Hierarchical breadcrumb navigation with proportional size bars and instant folder drill-down.
+- **Storage hogs**: Ranked leaderboard of the largest space consumers across your device.
 - **Material You**: On Android 12+, pulls accents from your system wallpaper. Falls back to dark/light palettes on Android 11 and older.
-- **Bottom navigation**: Treemap, Directory Tree, File Types, and Settings.
+- **Bottom navigation**: Overview, Directory Explorer, Top Files, and File Types.
 - **Folder picker**: Storage Access Framework (SAF) folder selection through a Browse button, plus quick-access chips for common paths (`/sdcard`, `Downloads`, `DCIM`, `WhatsApp`, `Android/data`).
-- **Settings**: Adjust thread count (Auto/2/4/8/16), treemap depth (2-8), max nodes (500-5000), and theme mode.
-- **Extension legend**: Color strip mapping file types to treemap tiles.
+- **Settings**: Adjust thread count (Auto/2/4/8/16), traversal depth, and theme mode.
 
 ---
 
@@ -242,7 +243,7 @@ dscan/
 │   └── app/src/main/kotlin/com/dscan/app/
 │       ├── DscanBridge.kt    # JNI native method declarations
 │       ├── MainActivity.kt   # App entry, scan lifecycle, SAF folder picker
-│       └── ui/               # Theme, MainScreen, TreemapCanvas, ScanGauge, Settings
+│       └── ui/               # Theme, MainScreen, DirectoryList, ScanGauge, Settings
 └── plans/                # Implementation plans (32 executed, audit trail)
 ```
 

@@ -310,10 +310,7 @@ pub fn build_hierarchical_layout(
                 cushion: child_cushion,
             });
 
-            if has_children
-                && child_rect.w > 4.0
-                && child_rect.h > 4.0
-            {
+            if has_children && child_rect.w > 4.0 && child_rect.h > 4.0 {
                 queue.push((child_idx, child_rect, child_cushion));
             }
         }
