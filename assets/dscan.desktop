@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=dscan
+Comment=Extreme-performance disk space analyzer and Compose Multiplatform visualizer
+Exec=/opt/dscan/bin/dscan
+Icon=dscan
+Terminal=false
+Type=Application
+Categories=Utility;System;FileManager;

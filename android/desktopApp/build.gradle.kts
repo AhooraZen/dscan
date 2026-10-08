@@ -26,6 +26,14 @@ compose.desktop {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "dscan"
             packageVersion = "1.0.0"
+            linux {
+                packageVersion = "0.8.1"
+                debPackageVersion = "0.8.1"
+            }
+            macOS {
+                packageVersion = "1.0.0"
+                dmgPackageVersion = "1.0.0"
+            }
             description = "Disk Space Visualizer"
             copyright = "© 2026 AhooraZen"
             vendor = "AhooraZen"

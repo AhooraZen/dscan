@@ -11,5 +11,6 @@ build/
 android/local.properties
 android/.gradle
 android/.kotlin
+android/desktopApp/src/jvmMain/resources/libdscan.*
 .codebase-memory/
 
