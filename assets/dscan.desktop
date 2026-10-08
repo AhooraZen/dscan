@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=dscan
 Comment=Extreme-performance disk space analyzer and Compose Multiplatform visualizer
-Exec=/opt/dscan/bin/dscan
+Exec=dscan-desktop
 Icon=dscan
 Terminal=false
 Type=Application

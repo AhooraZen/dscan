@@ -21,6 +21,10 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "com.dscan.desktop.MainKt"
+        jvmArgs += listOf(
+            "-Dfile.encoding=UTF-8",
+            "-Dsun.jnu.encoding=UTF-8"
+        )
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)

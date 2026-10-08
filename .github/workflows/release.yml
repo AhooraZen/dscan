@@ -166,7 +166,13 @@ jobs:
           mkdir -p arch_pkg/usr/bin arch_pkg/opt arch_pkg/usr/share/applications arch_pkg/usr/share/pixmaps
           cp target/release/dscan arch_pkg/usr/bin/dscan
           cp -r android/desktopApp/build/compose/binaries/main/app/dscan arch_pkg/opt/
-          ln -sf /opt/dscan/bin/dscan arch_pkg/usr/bin/dscan-desktop
+          cat << 'EOF' > arch_pkg/usr/bin/dscan-desktop
+#!/bin/sh
+export LC_ALL="${LC_ALL:-C.UTF-8}"
+export LANG="${LANG:-C.UTF-8}"
+exec /opt/dscan/bin/dscan "$@"
+EOF
+          chmod +x arch_pkg/usr/bin/dscan-desktop
           cp assets/dscan.desktop arch_pkg/usr/share/applications/dscan.desktop
           if [ -f android/desktopApp/build/compose/binaries/main/app/dscan/lib/dscan.png ]; then
             cp android/desktopApp/build/compose/binaries/main/app/dscan/lib/dscan.png arch_pkg/usr/share/pixmaps/dscan.png
