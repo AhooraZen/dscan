@@ -98,20 +98,27 @@ object DscanBridge {
             else -> if (arch.contains("aarch64") || arch.contains("arm")) "linux-arm64" else "linux-x64"
         }
 
-        val resourcePath = "/native/$resourcePrefix/$libName"
-        try {
-            val stream: InputStream? = DscanBridge::class.java.getResourceAsStream(resourcePath)
-            if (stream != null) {
-                val tempFile = File.createTempFile("libdscan-", "-${System.currentTimeMillis()}.$libName")
-                tempFile.deleteOnExit()
-                tempFile.outputStream().use { out ->
-                    stream.copyTo(out)
+        val resourcePaths = listOf(
+            "/$libName",
+            "/native/$resourcePrefix/$libName",
+            "native/$resourcePrefix/$libName"
+        )
+        for (rPath in resourcePaths) {
+            try {
+                val stream: InputStream? = DscanBridge::class.java.getResourceAsStream(rPath)
+                    ?: DscanBridge::class.java.classLoader?.getResourceAsStream(rPath.trimStart('/'))
+                if (stream != null) {
+                    val tempFile = File.createTempFile("libdscan-", "-${System.currentTimeMillis()}-$libName")
+                    tempFile.deleteOnExit()
+                    tempFile.outputStream().use { out ->
+                        stream.copyTo(out)
+                    }
+                    System.load(tempFile.absolutePath)
+                    isLoaded = true
+                    return
                 }
-                System.load(tempFile.absolutePath)
-                isLoaded = true
-                return
-            }
-        } catch (_: Throwable) {}
+            } catch (_: Throwable) {}
+        }
 
         if (!isLoaded) {
             System.err.println("DscanBridge: Warning - libdscan native library could not be loaded.")
