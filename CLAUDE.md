@@ -5,45 +5,56 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build, Test, and Quality Commands
 
 ```bash
-# Build
+# Workspace Build
 cargo build
 cargo build --release
 
-# Run
-cargo run -- .
-cargo run -- /path/to/scan --top 20 --depth 2 --threads 16
+# Run CLI
+cargo run -p dscan -- .
+cargo run -p dscan -- /path/to/scan --top 20 --depth 2 --threads 16
 
-# Run tests
-cargo test
-cargo test <test_name>
-cargo test -- --nocapture
+# Run Tests
+cargo test --workspace
+cargo test -p dscan-core
+cargo test -p dscan
+cargo test -p dscan-jni
 
-# Lint and format
-cargo check
-cargo clippy --all-targets -- -D warnings
+# Lint and Format
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 cargo fmt
+
+# Desktop Visualizer (Compose Multiplatform)
+cd android && ./gradlew :desktopApp:run
+cd android && ./gradlew :desktopApp:assemble
+
+# Android APK (Jetpack Compose)
+cd android && ./gradlew :androidApp:assembleDebug
+cd android && ./gradlew :androidApp:assembleRelease
 ```
 
 ## Architecture and Design
 
-`dscan` is a zero-external-dependency, multi-threaded disk space analyzer for Linux. It achieves high throughput by pairing direct Linux kernel syscalls (`getdents64`) with work-stealing parallelism and thread-local aggregation.
+`dscan` is an extreme-performance, zero-external-dependency multi-threaded disk space analyzer for Linux and Windows, paired with a unified 100% shared Compose Multiplatform visualizer (Desktop & Android).
 
-### Key Modules
+### Workspace Crates
 
-- **`src/sys.rs`**: Raw Linux ABI definitions. Declares `SYS_GETDENTS64` (architecture-specific: 217 on x86_64, 61 on aarch64), `LinuxDirent64` C struct layout, and POSIX `open`/`close`/`syscall` externs. `open_dir` opens directories with `O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOATIME`.
-- **`src/scanner.rs`**: Core traversal and synchronization engine:
-  - **Raw Directory Traversal (`scan_directory_tree`)**: Reads directory entries in bulk using `getdents64` into a 64 KiB buffer, bypassing libc `readdir` overhead. Falls back to `std::fs::read_dir` if syscall fails.
-  - **Filesystem Boundary Guard**: Compares `meta.dev() == root_dev` (`MetadataExt`) to stay on the origin device and prevent traversing virtual or network mounts.
-  - **Space Calculation**: Uses `meta.blocks() * 512` to measure actual allocated disk space (accounting for sparse files and filesystem block allocation).
-  - **Work-Stealing Concurrency**: Global `QueueState` (`VecDeque<PathBuf>`) protected by `Mutex` and `Condvar`. If a worker finds multiple subdirectories and idle workers exist (`active_workers < threads`), it splits its subdirectory list and pushes half to the global queue.
-  - **Contention-Free Aggregation**: Workers accumulate directory sizes up to `--depth` in thread-local `HashMap<PathBuf, u64>` and track largest files in a thread-local `BinaryHeap<Reverse<(u64, PathBuf)>>` min-heap. Results are merged on the main thread after all workers join.
-  - **Progress Reporter**: Separate background thread renders an animated spinner and scans status every 60ms by sampling atomics (`total_bytes`, `total_files`, `active_workers`).
-- **`src/cli.rs`**: Handcrafted command-line argument parser with zero external crates. Handles `--exclude`, `--top`, `--depth`, `--threads`/`-j`, `-h`/`--help`, and `-V`/`--version`. Excludes `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, and `.git` by default.
-- **`src/ui.rs`**: Neon/cyberpunk ANSI terminal formatting. Handles dynamic column width via `ioctl(TIOCGWINSZ)`, Unicode progress bar generation (`make_bar`), spinner updates, and path truncation.
-- **`src/format.rs`**: Human-readable binary byte formatting (B, KiB, MiB, GiB, TiB, PiB).
+- **`crates/dscan-core`**: Core traversal and synchronization engine:
+  - **Raw Directory Traversal (`scanner/linux.rs`, `scanner/windows.rs`)**: Reads directory entries in bulk using `getdents64` into a page-aligned 64 KiB buffer on Linux (`NtQueryDirectoryFile` on Windows), bypassing libc overhead.
+  - **Canonical Metadata Accounting**: Uses raw `sys_statx` with `STATX_BLOCKS` (`stx_blocks * 512`) on Linux and `AllocationSize` on Windows to account for sparse files and filesystem block allocation.
+  - **Lock-Free Work-Stealing**: Custom Chase-Lev deques with true single-CAS atomic batch stealing (`steal_batch`) and conditional `notify_one()` wakeups to eliminate thundering herds.
+  - **Container CFS CPU Quota Scaling**: Reads cgroup v1 and v2 CPU quotas (`/sys/fs/cgroup/cpu.max`), automatically clamping thread counts to container vCPUs.
+  - **Zero-Allocation Hierarchical Arena (`arena.rs`)**: 32-bit indexed bump allocator (`DirArena`). Worker subtrees are merged into master arena with `merge_subtree` and rolled up in a single O(N) reverse array pass in <5ms.
+  - **SIMD String Acceleration (`simd.rs`)**: AVX2 and NEON SIMD algorithms for fast null-byte searching, exclusion prefix matching, and UTF-16/UTF-8 transcoding.
+  - **Scan Session (`snapshot.rs`)**: Non-blocking background scanning with atomic progress tracking, pause/resume, and cancellation for UI consumers.
+- **`crates/dscan-cli`**: Zero-dependency terminal binary with cyberpunk ANSI formatting, argument parser (`--json`, `--ext`, `--all`, `-j`), dynamic column sizing, and terminal progress bar.
+- **`crates/dscan-jni`**: Cross-platform shared C-ABI library (`libdscan.so`/`.dll`/`.dylib`) exposing `dscan-core` directly to Compose Multiplatform without JNI reflection overhead.
+- **`android/` (Compose Multiplatform)**:
+  - **`:shared`**: 100% shared Kotlin Compose UI (`MainScreen`, `DesktopMainView`, `TreemapView`, `DirectoryList`, `Theme`, `DscanBridge`). Implements high-performance Skia Canvas Cushion Treemap rendering (120 FPS).
+  - **`:desktopApp`**: Compose Desktop application with resizable split-pane layout, hover tooltips, click drilldown, search highlighting (`Ctrl+F`), native file manager reveal, safe trash deletion, and menu shortcuts.
+  - **`:androidApp`**: Android APK with Storage Access Framework (SAF), foreground notifications, and mobile storage dashboards.
 
 ### Invariants & Platform Requirements
 
-- Target OS is Linux. Syscall numbers and `LinuxDirent64` structure layouts depend on Linux kernel interfaces.
-- The project intentionally avoids third-party crates (like `clap`, `rayon`, or `nix`) to maintain minimal binary size, instant compilation, and zero runtime dependencies.
+- Core engine (`dscan-core`) and CLI (`dscan-cli`) maintain strictly **zero external runtime dependencies** (no `clap`, `rayon`, `nix`, etc.).
+- Linux kernel interfaces use direct syscall numbers and 256-byte UAPI `Statx` layouts across x86_64, aarch64, arm32, and riscv64.

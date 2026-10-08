@@ -3,8 +3,7 @@ resolver = "3"
 members = [
     "crates/dscan-core",
     "crates/dscan-cli",
-    "crates/dscan-gui",
-    "crates/dscan-android",
+    "crates/dscan-jni",
 ]
 default-members = [
     "crates/dscan-core",

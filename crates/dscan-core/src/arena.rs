@@ -226,6 +226,99 @@ impl DirArena {
         }
     }
 
+    /// Merges a slice of nodes `start_idx..end_idx` from `other` into `self`.
+    ///
+    /// If `attach_as_child` is `true`:
+    /// - The subtree root node is added as a new child of `target_master_idx` in `self`.
+    /// - If `name_override` is `Some(name)`, `name` is used as the node's name in `self`
+    ///   (useful when worker root stored a full path instead of a relative component).
+    ///
+    /// If `attach_as_child` is `false`:
+    /// - The subtree root node's `direct_bytes` are accumulated into `self.nodes[target_master_idx]`.
+    /// - `node_remapping[start_idx] = target_master_idx`.
+    /// - Only children in `(start_idx + 1)..end_idx` are added to `self`.
+    ///
+    /// `name_base` is the offset in `self.names` where `other.names` was copied.
+    /// `node_remapping` is updated with `node_remapping[other_idx] = new_master_idx`.
+    // Subtree grafting requires source slice bounds, target parent index, name override, attachment mode, and remapping buffers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn merge_subtree(
+        &mut self,
+        other: &DirArena,
+        start_idx: usize,
+        end_idx: usize,
+        target_master_idx: u32,
+        name_override: Option<&[u8]>,
+        attach_as_child: bool,
+        name_base: u32,
+        node_remapping: &mut [u32],
+    ) -> u32 {
+        if start_idx >= end_idx || start_idx >= other.nodes.len() {
+            return target_master_idx;
+        }
+        let end_idx = end_idx.min(other.nodes.len());
+
+        let root_node = other.nodes[start_idx];
+        let master_root_idx = if attach_as_child {
+            let (name_offset, name_len) = if let Some(override_name) = name_override {
+                let off = self.names.len() as u32;
+                self.names.extend_from_slice(override_name);
+                (off, override_name.len() as u32)
+            } else {
+                (root_node.name_offset + name_base, root_node.name_len)
+            };
+
+            let new_idx = self.nodes.len() as u32;
+            if start_idx < node_remapping.len() {
+                node_remapping[start_idx] = new_idx;
+            }
+            self.nodes.push(ArenaNode {
+                parent_idx: target_master_idx,
+                rel_depth: root_node.rel_depth,
+                flags: 0,
+                direct_bytes: root_node.direct_bytes,
+                total_bytes: 0,
+                name_offset,
+                name_len,
+            });
+            new_idx
+        } else {
+            if let Some(target) = self.nodes.get_mut(target_master_idx as usize) {
+                target.direct_bytes += root_node.direct_bytes;
+            }
+            if start_idx < node_remapping.len() {
+                node_remapping[start_idx] = target_master_idx;
+            }
+            target_master_idx
+        };
+
+        for i in (start_idx + 1)..end_idx {
+            let node = other.nodes[i];
+            let parent_master_idx = if (node.parent_idx as usize) < node_remapping.len() {
+                let p = node_remapping[node.parent_idx as usize];
+                if p == u32::MAX { master_root_idx } else { p }
+            } else {
+                master_root_idx
+            };
+
+            let new_idx = self.nodes.len() as u32;
+            if i < node_remapping.len() {
+                node_remapping[i] = new_idx;
+            }
+            self.nodes.push(ArenaNode {
+                parent_idx: parent_master_idx,
+                rel_depth: node.rel_depth,
+                flags: 0,
+                direct_bytes: node.direct_bytes,
+                total_bytes: 0,
+                name_offset: node.name_offset + name_base,
+                name_len: node.name_len,
+            });
+        }
+
+        master_root_idx
+    }
+
     /// Reconstructs the full path for a node by climbing the parent index chain.
     pub fn reconstruct_path(&self, mut curr: u32, out: &mut Vec<u8>) {
         out.clear();
@@ -320,5 +413,99 @@ mod tests {
 
         arena.reconstruct_path(root, &mut path);
         assert_eq!(path, b"/usr");
+    }
+
+    #[test]
+    fn test_arena_merge_subtree_and_rollup() {
+        // Ground truth single-threaded arena
+        let mut expected_arena = DirArena::new();
+        let exp_root = expected_arena.add_root(0, b"/test");
+        expected_arena.add_direct_bytes(exp_root, 10);
+        let exp_a = expected_arena.add_node(exp_root, 1, b"a");
+        expected_arena.add_direct_bytes(exp_a, 20);
+        let exp_a1 = expected_arena.add_node(exp_a, 2, b"a1");
+        expected_arena.add_direct_bytes(exp_a1, 30);
+        let exp_b = expected_arena.add_node(exp_root, 1, b"b");
+        expected_arena.add_direct_bytes(exp_b, 40);
+        let exp_b1 = expected_arena.add_node(exp_b, 2, b"b1");
+        expected_arena.add_direct_bytes(exp_b1, 50);
+
+        expected_arena.rollup();
+
+        assert_eq!(expected_arena.nodes[exp_root as usize].total_bytes, 150);
+        assert_eq!(expected_arena.nodes[exp_a as usize].total_bytes, 50);
+        assert_eq!(expected_arena.nodes[exp_a1 as usize].total_bytes, 30);
+        assert_eq!(expected_arena.nodes[exp_b as usize].total_bytes, 90);
+        assert_eq!(expected_arena.nodes[exp_b1 as usize].total_bytes, 50);
+
+        // Multi-worker scenario:
+        // Worker 0 scanned /test and /test/a/a1
+        let mut worker_0 = DirArena::new();
+        let w0_root = worker_0.add_root(0, b"/test");
+        worker_0.add_direct_bytes(w0_root, 10);
+        let w0_a = worker_0.add_node(w0_root, 1, b"a");
+        worker_0.add_direct_bytes(w0_a, 20);
+        let w0_a1 = worker_0.add_node(w0_a, 2, b"a1");
+        worker_0.add_direct_bytes(w0_a1, 30);
+
+        // Worker 1 scanned stolen task /test/b and /test/b/b1
+        let mut worker_1 = DirArena::new();
+        let w1_root = worker_1.add_root(1, b"/test/b");
+        worker_1.add_direct_bytes(w1_root, 40);
+        let w1_b1 = worker_1.add_node(w1_root, 2, b"b1");
+        worker_1.add_direct_bytes(w1_b1, 50);
+
+        // Master arena merges both
+        let mut master_arena = DirArena::new();
+        let m_root = master_arena.add_root(0, b"/test");
+
+        let name_base_0 = master_arena.names.len() as u32;
+        master_arena.names.extend_from_slice(&worker_0.names);
+        let mut remapping_0 = vec![u32::MAX; worker_0.len()];
+        master_arena.merge_subtree(
+            &worker_0,
+            0,
+            worker_0.len(),
+            m_root,
+            None,
+            false,
+            name_base_0,
+            &mut remapping_0,
+        );
+
+        let name_base_1 = master_arena.names.len() as u32;
+        master_arena.names.extend_from_slice(&worker_1.names);
+        let mut remapping_1 = vec![u32::MAX; worker_1.len()];
+        master_arena.merge_subtree(
+            &worker_1,
+            0,
+            worker_1.len(),
+            m_root,
+            Some(b"b"),
+            true,
+            name_base_1,
+            &mut remapping_1,
+        );
+
+        master_arena.rollup();
+
+        assert_eq!(master_arena.len(), 5);
+        assert_eq!(master_arena.nodes[0].total_bytes, 150); // /test
+        assert_eq!(master_arena.nodes[1].total_bytes, 50); // a
+        assert_eq!(master_arena.nodes[2].total_bytes, 30); // a1
+        assert_eq!(master_arena.nodes[3].total_bytes, 90); // b
+        assert_eq!(master_arena.nodes[4].total_bytes, 50); // b1
+
+        let mut path = Vec::new();
+        master_arena.reconstruct_path(0, &mut path);
+        assert_eq!(path, b"/test");
+        master_arena.reconstruct_path(1, &mut path);
+        assert_eq!(path, b"/test/a");
+        master_arena.reconstruct_path(2, &mut path);
+        assert_eq!(path, b"/test/a/a1");
+        master_arena.reconstruct_path(3, &mut path);
+        assert_eq!(path, b"/test/b");
+        master_arena.reconstruct_path(4, &mut path);
+        assert_eq!(path, b"/test/b/b1");
     }
 }

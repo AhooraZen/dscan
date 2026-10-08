@@ -1,0 +1,19 @@
+[package]
+name = "dscan-jni"
+version = "0.7.0"
+edition = "2024"
+authors = ["AhooraZen <ahoora935137@gmail.com>"]
+description = "Native JNI bridge for dscan disk space analyzer across desktop and Android"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "dscan"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dscan-core = { version = "0.7.0", path = "../dscan-core" }
+jni = { version = "0.21", default-features = false }
+sysinfo = "0.33"
+trash = "5.2"
+open = "5.3"
+

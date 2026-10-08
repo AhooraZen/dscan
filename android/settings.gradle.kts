@@ -14,4 +14,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "dscan"
-include(":app")
+include(":shared")
+include(":androidApp")
+include(":desktopApp")

@@ -4,5 +4,11 @@
 *.swp
 *.bak
 .DS_Store
-node_modules
-crates/dscan-gui/ui/node_modules
+.gradle
+.kotlin
+build/
+**/build/
+android/local.properties
+android/.gradle
+android/.kotlin
+
