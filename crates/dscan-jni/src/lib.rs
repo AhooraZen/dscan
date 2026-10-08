@@ -140,7 +140,7 @@ pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
             .spawn()
             .map_err(|e| e.to_string())?;
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_os = "android")))]
     {
         if let Some(parent) = path.parent() {
             open::that(parent).map_err(|e| e.to_string())?;
@@ -148,7 +148,17 @@ pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
             open::that(path).map_err(|e| e.to_string())?;
         }
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "android")]
+    {
+        let _ = path;
+        return Err("Reveal in file manager is not supported on Android".to_string());
+    }
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "android"
+    )))]
     {
         open::that(path).map_err(|e| e.to_string())?;
     }
@@ -158,7 +168,15 @@ pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
 /// Move file or directory to OS trash/recycle bin safely
 pub fn move_to_trash(path: &Path, scan_root: &Path) -> Result<(), String> {
     is_safe_to_trash(path, scan_root).map_err(ToString::to_string)?;
-    trash::delete(path).map_err(|e| format!("Failed to move to trash: {e}"))
+    #[cfg(not(target_os = "android"))]
+    {
+        trash::delete(path).map_err(|e| format!("Failed to move to trash: {e}"))
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = path;
+        Err("Moving to trash is not supported on Android".to_string())
+    }
 }
 
 /// Start an asynchronous disk scan session.

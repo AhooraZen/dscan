@@ -14,5 +14,7 @@ crate-type = ["cdylib", "rlib"]
 dscan-core = { version = "0.8.1", path = "../dscan-core" }
 jni = { version = "0.21", default-features = false }
 sysinfo = "0.33"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
 trash = "5.2"
 open = "5.3"
