@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dscan_cli::cli::CliOptions;
 use dscan_cli::json;
-use dscan_cli::ui::{self, print_header};
+use dscan_cli::ui;
 use dscan_core::run_scan_with_progress;
 
 fn main() {
@@ -14,10 +14,6 @@ fn main() {
         Some(opts) => opts,
         None => return,
     };
-
-    if !options.json {
-        print_header(&options.target_path, options.threads, &options.excludes);
-    }
 
     let progress_cb: Option<dscan_core::ProgressCallback> = if options.json {
         None
@@ -41,7 +37,13 @@ fn main() {
                 );
             } else {
                 ui::clear_spinner_line();
-                ui::render_report(&result, options.ext);
+                ui::render_report(
+                    &options.target_path,
+                    &result,
+                    options.threads,
+                    &options.excludes,
+                    options.ext,
+                );
             }
         }
         Err(e) => {

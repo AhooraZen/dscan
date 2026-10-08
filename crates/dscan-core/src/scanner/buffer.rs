@@ -282,6 +282,20 @@ impl FlatSubdirBuf {
     }
 
     #[inline(always)]
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.offsets.len() {
+            if len == 0 {
+                self.names.clear();
+                self.offsets.clear();
+            } else {
+                let (offset, _) = self.offsets[len];
+                self.names.truncate(offset as usize);
+                self.offsets.truncate(len);
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.offsets.len()
     }
@@ -350,6 +364,18 @@ mod tests {
 
         buf.clear();
         assert!(buf.is_empty());
+        assert_eq!(buf.len(), 0);
+
+        buf.push(b"first");
+        buf.push(b"second");
+        buf.push(b"third");
+        assert_eq!(buf.len(), 3);
+        buf.truncate(2);
+        assert_eq!(buf.len(), 2);
+        assert_eq!(buf.get(0), Some(&b"first"[..]));
+        assert_eq!(buf.get(1), Some(&b"second"[..]));
+        assert_eq!(buf.get(2), None);
+        buf.truncate(0);
         assert_eq!(buf.len(), 0);
     }
 }

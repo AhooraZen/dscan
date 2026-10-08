@@ -241,25 +241,25 @@ impl<T> Stealer<T> {
         }
     }
 
-    /// Atomically steals up to `max_batch` tasks (typically half the victim's queue) in a single CAS.
+    /// Steals up to `max_batch` tasks from the victim's queue.
     /// Stolen tasks are directly transferred into the caller's `dest` worker deque.
-    /// Returns the number of items successfully stolen (0 if empty or CAS lost).
+    /// Returns the number of items successfully stolen.
     pub fn steal_batch(&self, dest: &Worker<T>, max_batch: usize) -> usize {
-        let max_cap = max_batch.clamp(1, 32);
-        let mut stolen = 0;
-
-        while stolen < max_cap {
+        let mut count = 0;
+        let limit = max_batch.clamp(1, 32);
+        while count < limit {
             match self.steal() {
                 Steal::Success(item) => {
                     dest.push(item);
-                    stolen += 1;
+                    count += 1;
                 }
                 Steal::Empty => break,
-                Steal::Retry => break,
+                Steal::Retry => {
+                    std::hint::spin_loop();
+                }
             }
         }
-
-        stolen
+        count
     }
 }
 

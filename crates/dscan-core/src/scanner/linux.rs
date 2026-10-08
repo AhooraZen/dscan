@@ -12,7 +12,7 @@ use crate::sys::{
 };
 use crate::work_stealing::Worker;
 
-use super::buffer::DualBuffer;
+use super::buffer::{DualBuffer, FlatSubdirBuf};
 use super::state::GlobalState;
 use super::{record_file_ext, record_file_stat};
 
@@ -26,6 +26,7 @@ pub fn scan_directory_tree(
     worker: &Worker<PathBuf>,
     dual_buffer: &mut DualBuffer,
     path_stack: &mut Vec<u8>,
+    sub_dir_pool: &mut FlatSubdirBuf,
     local_arena: &mut DirArena,
     local_top_files: &mut LocalTopFiles,
     local_ext_stats: &mut std::collections::HashMap<String, (u64, u64)>,
@@ -37,7 +38,7 @@ pub fn scan_directory_tree(
     }
 
     let mut local_dir_size: u64 = 0;
-    let mut sub_dirs: Vec<Vec<u8>> = Vec::with_capacity(16);
+    let frame_start = sub_dir_pool.len();
 
     let root_dev = state.config.root_dev;
     let matcher = &state.config.matcher;
@@ -129,26 +130,24 @@ pub fn scan_directory_tree(
                     continue;
                 }
 
-                let orig_len = path_stack.len();
-                if dir_bytes == b"." {
-                    path_stack.clear();
-                    path_stack.extend_from_slice(name_bytes);
-                } else {
-                    if !path_stack.ends_with(b"/") && !path_stack.is_empty() {
-                        path_stack.push(b'/');
-                    }
-                    path_stack.extend_from_slice(name_bytes);
-                }
-
-                if matcher.is_excluded(path_stack, name_bytes) {
-                    path_stack.truncate(orig_len);
-                    continue;
-                }
-
                 let d_type = dirent.d_type;
                 match d_type {
                     DT_DIR => {
-                        sub_dirs.push(name_bytes.to_vec());
+                        let orig_len = path_stack.len();
+                        if dir_bytes == b"." {
+                            path_stack.clear();
+                            path_stack.extend_from_slice(name_bytes);
+                        } else {
+                            if !path_stack.ends_with(b"/") && !path_stack.is_empty() {
+                                path_stack.push(b'/');
+                            }
+                            path_stack.extend_from_slice(name_bytes);
+                        }
+
+                        if !matcher.is_excluded(path_stack, name_bytes) {
+                            sub_dir_pool.push(name_bytes);
+                        }
+                        path_stack.truncate(orig_len);
                     }
                     DT_REG => {
                         #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -223,17 +222,33 @@ pub fn scan_directory_tree(
                             if file_type == S_IFDIR {
                                 let dev = crate::sys::makedev(stx.stx_dev_major, stx.stx_dev_minor);
                                 if state.config.cross_filesystems || dev == root_dev {
-                                    if state.config.follow_symlinks {
-                                        if state
-                                            .visited_dirs
-                                            .lock()
-                                            .unwrap()
-                                            .insert((dev, stx.stx_ino))
-                                        {
-                                            sub_dirs.push(name_bytes.to_vec());
-                                        }
+                                    let orig_len = path_stack.len();
+                                    if dir_bytes == b"." {
+                                        path_stack.clear();
+                                        path_stack.extend_from_slice(name_bytes);
                                     } else {
-                                        sub_dirs.push(name_bytes.to_vec());
+                                        if !path_stack.ends_with(b"/") && !path_stack.is_empty() {
+                                            path_stack.push(b'/');
+                                        }
+                                        path_stack.extend_from_slice(name_bytes);
+                                    }
+
+                                    let is_excl = matcher.is_excluded(path_stack, name_bytes);
+                                    path_stack.truncate(orig_len);
+
+                                    if !is_excl {
+                                        if state.config.follow_symlinks {
+                                            if state
+                                                .visited_dirs
+                                                .lock()
+                                                .unwrap()
+                                                .insert((dev, stx.stx_ino))
+                                            {
+                                                sub_dir_pool.push(name_bytes);
+                                            }
+                                        } else {
+                                            sub_dir_pool.push(name_bytes);
+                                        }
                                     }
                                 }
                             } else if file_type == S_IFREG {
@@ -252,31 +267,52 @@ pub fn scan_directory_tree(
                     }
                     _ => {}
                 }
-
-                path_stack.truncate(orig_len);
             }
         }
 
         local_arena.add_direct_bytes(current_node, local_dir_size);
 
+        let frame_end = sub_dir_pool.len();
+        let num_subs = frame_end - frame_start;
+        let mut local_subs_count = num_subs;
+
         // Dynamic work-stealing offload to idle peers
-        if sub_dirs.len() > 1 {
-            let half = sub_dirs.split_off(sub_dirs.len() / 2);
-            for sub_name in half {
-                let child_path = if dir_bytes == b"." {
-                    PathBuf::from(std::ffi::OsStr::from_bytes(&sub_name))
-                } else {
-                    dir_path.join(std::ffi::OsStr::from_bytes(&sub_name))
-                };
-                worker.push(child_path);
+        if state.config.threads > 1
+            && num_subs > 1
+            && (worker.is_empty()
+                || state.active_workers.load(Ordering::Relaxed) < state.config.threads)
+        {
+            let half = num_subs / 2;
+            let steal_start = frame_end - half;
+            for idx in steal_start..frame_end {
+                if let Some(sub_name) = sub_dir_pool.get(idx) {
+                    let child_path = if dir_bytes == b"." {
+                        PathBuf::from(std::ffi::OsStr::from_bytes(sub_name))
+                    } else {
+                        dir_path.join(std::ffi::OsStr::from_bytes(sub_name))
+                    };
+                    worker.push(child_path);
+                }
             }
+            sub_dir_pool.truncate(steal_start);
+            local_subs_count -= half;
             state.cvar.notify_all();
         }
 
-        for sub_name in sub_dirs {
+        for local_idx in 0..local_subs_count {
+            let idx = frame_start + local_idx;
+            let sub_name_slice = match sub_dir_pool.get(idx) {
+                Some(s) => s,
+                None => continue,
+            };
+            let mut sub_name_buf = [0u8; 256];
+            let name_len = sub_name_slice.len().min(255);
+            sub_name_buf[..name_len].copy_from_slice(&sub_name_slice[..name_len]);
+            let sub_name = &sub_name_buf[..name_len];
+
             let (child_node, next_rel_depth) = if rel_depth < state.config.max_depth {
                 let next_d = rel_depth + 1;
-                let node = local_arena.add_node(current_node, next_d as u16, &sub_name);
+                let node = local_arena.add_node(current_node, next_d as u16, sub_name);
                 (node, next_d)
             } else {
                 (current_node, rel_depth + 1)
@@ -285,19 +321,19 @@ pub fn scan_directory_tree(
             let orig_len = path_stack.len();
             if dir_bytes == b"." {
                 path_stack.clear();
-                path_stack.extend_from_slice(&sub_name);
+                path_stack.extend_from_slice(sub_name);
             } else {
                 if !path_stack.ends_with(b"/") && !path_stack.is_empty() {
                     path_stack.push(b'/');
                 }
-                path_stack.extend_from_slice(&sub_name);
+                path_stack.extend_from_slice(sub_name);
             }
             let child_path = PathBuf::from(std::ffi::OsStr::from_bytes(path_stack));
 
-            let child_fd = if sub_name.len() < 255 {
+            let child_fd = {
                 let mut name_c = [0u8; 256];
-                name_c[..sub_name.len()].copy_from_slice(&sub_name);
-                name_c[sub_name.len()] = 0;
+                name_c[..name_len].copy_from_slice(sub_name);
+                name_c[name_len] = 0;
                 match crate::sys::open_dir_at2(
                     fd,
                     name_c.as_ptr() as *const std::ffi::c_char,
@@ -319,8 +355,6 @@ pub fn scan_directory_tree(
                     }
                     _ => None,
                 }
-            } else {
-                None
             };
 
             dual_buffer.swap();
@@ -333,6 +367,7 @@ pub fn scan_directory_tree(
                 worker,
                 dual_buffer,
                 path_stack,
+                sub_dir_pool,
                 local_arena,
                 local_top_files,
                 local_ext_stats,
@@ -344,15 +379,18 @@ pub fn scan_directory_tree(
             path_stack.truncate(orig_len);
         }
 
+        sub_dir_pool.truncate(frame_start);
+
         // SAFETY: fd was opened by open_dir or open_dir_at2.
         unsafe { crate::sys::close(fd) };
     } else if let Ok(entries) = fs::read_dir(dir_path) {
         for entry in entries.flatten() {
             let path = entry.path();
             let p_bytes = path.as_os_str().as_bytes();
-            let name_bytes = entry.file_name().as_os_str().as_bytes().to_vec();
+            let name_os = entry.file_name();
+            let name_bytes = name_os.as_os_str().as_bytes();
 
-            if matcher.is_excluded(p_bytes, &name_bytes) {
+            if matcher.is_excluded(p_bytes, name_bytes) {
                 continue;
             }
 
@@ -366,16 +404,16 @@ pub fn scan_directory_tree(
                 let is_on_root_dev = state.config.cross_filesystems || meta.dev() == root_dev;
                 if meta.is_dir() {
                     if is_on_root_dev {
-                        sub_dirs.push(name_bytes);
+                        sub_dir_pool.push(name_bytes);
                     }
                 } else if is_on_root_dev {
                     let sz = meta.blocks() * 512;
                     local_dir_size += sz;
                     record_file_stat(local_files, local_bytes, sz, state);
-                    local_top_files.push(sz, current_node, &name_bytes, local_arena);
+                    local_top_files.push(sz, current_node, name_bytes, local_arena);
                     record_file_ext(
                         local_ext_stats,
-                        &name_bytes,
+                        name_bytes,
                         sz,
                         state.config.collect_ext_stats,
                     );
@@ -385,24 +423,47 @@ pub fn scan_directory_tree(
 
         local_arena.add_direct_bytes(current_node, local_dir_size);
 
+        let frame_end = sub_dir_pool.len();
+        let num_subs = frame_end - frame_start;
+        let mut local_subs_count = num_subs;
+
         // Dynamic work-stealing offload to idle peers
-        if sub_dirs.len() > 1 {
-            let half = sub_dirs.split_off(sub_dirs.len() / 2);
-            for sub_name in half {
-                let child_path = if dir_bytes == b"." {
-                    PathBuf::from(std::ffi::OsStr::from_bytes(&sub_name))
-                } else {
-                    dir_path.join(std::ffi::OsStr::from_bytes(&sub_name))
-                };
-                worker.push(child_path);
+        if state.config.threads > 1
+            && num_subs > 1
+            && (worker.is_empty()
+                || state.active_workers.load(Ordering::Relaxed) < state.config.threads)
+        {
+            let half = num_subs / 2;
+            let steal_start = frame_end - half;
+            for idx in steal_start..frame_end {
+                if let Some(sub_name) = sub_dir_pool.get(idx) {
+                    let child_path = if dir_bytes == b"." {
+                        PathBuf::from(std::ffi::OsStr::from_bytes(sub_name))
+                    } else {
+                        dir_path.join(std::ffi::OsStr::from_bytes(sub_name))
+                    };
+                    worker.push(child_path);
+                }
             }
+            sub_dir_pool.truncate(steal_start);
+            local_subs_count -= half;
             state.cvar.notify_all();
         }
 
-        for sub_name in sub_dirs {
+        for local_idx in 0..local_subs_count {
+            let idx = frame_start + local_idx;
+            let sub_name_slice = match sub_dir_pool.get(idx) {
+                Some(s) => s,
+                None => continue,
+            };
+            let mut sub_name_buf = [0u8; 256];
+            let name_len = sub_name_slice.len().min(255);
+            sub_name_buf[..name_len].copy_from_slice(&sub_name_slice[..name_len]);
+            let sub_name = &sub_name_buf[..name_len];
+
             let (child_node, next_rel_depth) = if rel_depth < state.config.max_depth {
                 let next_d = rel_depth + 1;
-                let node = local_arena.add_node(current_node, next_d as u16, &sub_name);
+                let node = local_arena.add_node(current_node, next_d as u16, sub_name);
                 (node, next_d)
             } else {
                 (current_node, rel_depth + 1)
@@ -411,12 +472,12 @@ pub fn scan_directory_tree(
             let orig_len = path_stack.len();
             if dir_bytes == b"." {
                 path_stack.clear();
-                path_stack.extend_from_slice(&sub_name);
+                path_stack.extend_from_slice(sub_name);
             } else {
                 if !path_stack.ends_with(b"/") && !path_stack.is_empty() {
                     path_stack.push(b'/');
                 }
-                path_stack.extend_from_slice(&sub_name);
+                path_stack.extend_from_slice(sub_name);
             }
             let child_path = PathBuf::from(std::ffi::OsStr::from_bytes(path_stack));
 
@@ -430,6 +491,7 @@ pub fn scan_directory_tree(
                 worker,
                 dual_buffer,
                 path_stack,
+                sub_dir_pool,
                 local_arena,
                 local_top_files,
                 local_ext_stats,
@@ -440,5 +502,7 @@ pub fn scan_directory_tree(
 
             path_stack.truncate(orig_len);
         }
+
+        sub_dir_pool.truncate(frame_start);
     }
 }

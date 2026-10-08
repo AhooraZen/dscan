@@ -102,6 +102,32 @@ pub const SYS_OPENAT2: i64 = 437;
 pub const SYS_OPENAT2: i64 = 437;
 
 #[cfg(target_arch = "x86_64")]
+pub const SYS_OPENAT: i64 = 257;
+
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "loongarch64"
+))]
+pub const SYS_OPENAT: i64 = 56;
+
+#[cfg(target_arch = "arm")]
+pub const SYS_OPENAT: i64 = 322;
+
+#[cfg(target_arch = "x86")]
+pub const SYS_OPENAT: i64 = 295;
+
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "loongarch64",
+    target_arch = "arm",
+    target_arch = "x86"
+)))]
+pub const SYS_OPENAT: i64 = 257;
+
+#[cfg(target_arch = "x86_64")]
 pub const SYS_PRLIMIT64: i64 = 302;
 
 #[cfg(any(
@@ -383,6 +409,38 @@ unsafe extern "C" {
     pub fn munmap(addr: *mut std::ffi::c_void, length: usize) -> i32;
 }
 
+/// Reads cgroup v1 and v2 CPU quotas (e.g. /sys/fs/cgroup/cpu.max) to determine container vCPUs.
+pub fn get_cgroup_cpu_limit() -> Option<usize> {
+    // 1. Check cgroup v2: /sys/fs/cgroup/cpu.max
+    if let Ok(content) = std::fs::read_to_string("/sys/fs/cgroup/cpu.max") {
+        let mut parts = content.split_whitespace();
+        if let (Some(max_str), Some(period_str)) = (parts.next(), parts.next())
+            && max_str != "max"
+            && let (Ok(max), Ok(period)) = (max_str.parse::<u64>(), period_str.parse::<u64>())
+            && period > 0
+        {
+            let cpus = max.div_ceil(period);
+            return Some(cpus.max(1) as usize);
+        }
+    }
+
+    // 2. Check cgroup v1: /sys/fs/cgroup/cpu/cpu.cfs_quota_us & cpu.cfs_period_us
+    if let (Ok(quota_s), Ok(period_s)) = (
+        std::fs::read_to_string("/sys/fs/cgroup/cpu/cpu.cfs_quota_us"),
+        std::fs::read_to_string("/sys/fs/cgroup/cpu/cpu.cfs_period_us"),
+    ) && let (Ok(quota), Ok(period)) = (
+        quota_s.trim().parse::<i64>(),
+        period_s.trim().parse::<u64>(),
+    ) && quota > 0
+        && period > 0
+    {
+        let cpus = (quota as u64).div_ceil(period);
+        return Some(cpus.max(1) as usize);
+    }
+
+    None
+}
+
 /// Pin current thread to physical CPU core.
 pub fn pin_thread_to_core(core_id: usize) -> bool {
     #[cfg(target_os = "android")]
@@ -456,21 +514,9 @@ pub fn raise_fd_limit() {
     }
 }
 
-/// Open a directory with direct flags (O_DIRECTORY | O_CLOEXEC | O_NOATIME).
-/// If open with O_NOATIME fails (e.g. unprivileged user), falls back to opening without O_NOATIME.
+/// Open a directory with direct flags (O_RDONLY | O_DIRECTORY | O_CLOEXEC).
 pub fn open_dir(path: &Path) -> Option<i32> {
     let path_c = CString::new(path.as_os_str().as_bytes()).ok()?;
-    // SAFETY: path_c is a valid null-terminated C string.
-    let fd = unsafe {
-        open(
-            path_c.as_ptr(),
-            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOATIME,
-        )
-    };
-    if fd >= 0 {
-        return Some(fd);
-    }
-    // Fallback without O_NOATIME for unprivileged scans
     // SAFETY: path_c is a valid null-terminated C string.
     let fd = unsafe { open(path_c.as_ptr(), O_RDONLY | O_DIRECTORY | O_CLOEXEC) };
     if fd >= 0 {
@@ -492,6 +538,26 @@ pub fn open_dir(path: &Path) -> Option<i32> {
     None
 }
 
+/// Open a directory relative to `dirfd` using raw `openat` syscall.
+#[inline(always)]
+pub fn open_dir_at(dirfd: i32, name: *const std::ffi::c_char) -> Result<i32, i32> {
+    // SAFETY: openat syscall with valid dirfd, null-terminated name, and flags.
+    let ret = unsafe {
+        syscall(
+            SYS_OPENAT,
+            dirfd as i64,
+            name as i64,
+            (O_RDONLY | O_DIRECTORY | O_CLOEXEC) as i64,
+            0i64,
+        )
+    };
+    if ret >= 0 {
+        Ok(ret as i32)
+    } else {
+        Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
+    }
+}
+
 static HAS_OPENAT2: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// Open a directory relative to `dirfd` using `openat2(2)`.
@@ -504,14 +570,18 @@ static HAS_OPENAT2: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 pub fn open_dir_at2(dirfd: i32, name: *const std::ffi::c_char, no_xdev: bool) -> Result<i32, i32> {
     use std::sync::atomic::Ordering;
 
-    if !HAS_OPENAT2.load(Ordering::Relaxed) {
-        return Err(ENOSYS);
+    if !no_xdev {
+        return open_dir_at(dirfd, name);
     }
 
-    let mut how = OpenHow {
-        flags: (O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOATIME) as u64,
+    if !HAS_OPENAT2.load(Ordering::Relaxed) {
+        return open_dir_at(dirfd, name);
+    }
+
+    let how = OpenHow {
+        flags: (O_RDONLY | O_DIRECTORY | O_CLOEXEC) as u64,
         mode: 0,
-        resolve: if no_xdev { RESOLVE_NO_XDEV } else { 0 },
+        resolve: RESOLVE_NO_XDEV,
     };
 
     // SAFETY: openat2 syscall with valid dirfd, null-terminated name, and pointer to OpenHow.
@@ -532,7 +602,7 @@ pub fn open_dir_at2(dirfd: i32, name: *const std::ffi::c_char, no_xdev: bool) ->
     let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
     if err == ENOSYS {
         HAS_OPENAT2.store(false, Ordering::Relaxed);
-        return Err(ENOSYS);
+        return open_dir_at(dirfd, name);
     }
 
     // Adaptive retry on EMFILE / ENFILE after yielding thread
@@ -552,26 +622,6 @@ pub fn open_dir_at2(dirfd: i32, name: *const std::ffi::c_char, no_xdev: bool) ->
         if ret_retry >= 0 {
             return Ok(ret_retry as i32);
         }
-    }
-
-    // Unprivileged user fallback: retry without O_NOATIME if EPERM or EACCES
-    if err == 1 /* EPERM */ || err == 13
-    /* EACCES */
-    {
-        how.flags = (O_RDONLY | O_DIRECTORY | O_CLOEXEC) as u64;
-        let ret2 = unsafe {
-            syscall(
-                SYS_OPENAT2,
-                dirfd as i64,
-                name as i64,
-                &how as *const OpenHow as i64,
-                std::mem::size_of::<OpenHow>() as i64,
-            )
-        };
-        if ret2 >= 0 {
-            return Ok(ret2 as i32);
-        }
-        return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0));
     }
 
     Err(err)

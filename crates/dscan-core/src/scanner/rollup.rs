@@ -9,9 +9,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::arena::{ARENA_FLAG_ROOT, DirArena, LocalTopFiles, TopFileCandidate};
-use crate::work_stealing::{Steal, Worker};
+use crate::work_stealing::Worker;
 
-use super::buffer::DualBuffer;
+use super::buffer::{DualBuffer, FlatSubdirBuf};
 use super::state::{GlobalState, ThreadLocalResult};
 use super::{ProgressCallback, ScanOptions, ScanResult, normalize_scan_path};
 
@@ -20,11 +20,10 @@ pub fn worker_loop(
     worker: Worker<PathBuf>,
     state: Arc<GlobalState>,
 ) -> ThreadLocalResult {
-    crate::sys::pin_thread_to_core(thread_id);
-
     let mut local_arena = DirArena::new();
     let mut local_top_files = LocalTopFiles::new(state.config.top_limit);
     let mut dual_buffer = DualBuffer::new(128 * 1024, 4096);
+    let mut sub_dir_pool = FlatSubdirBuf::with_capacity(65536, 4096);
     let mut path_stack = Vec::with_capacity(1024);
     #[cfg(windows)]
     let mut wide_path_stack = super::windows::WidePathStack::new();
@@ -61,11 +60,13 @@ pub fn worker_loop(
             for offset in 1..num_stealers {
                 let target_idx = (thread_id + offset) % num_stealers;
                 match state.stealers[target_idx].steal() {
-                    Steal::Success(t) => {
+                    crate::work_stealing::Steal::Success(t) => {
                         stolen = Some(t);
                         break;
                     }
-                    Steal::Retry | Steal::Empty => continue,
+                    crate::work_stealing::Steal::Retry | crate::work_stealing::Steal::Empty => {
+                        continue;
+                    }
                 }
             }
             stolen
@@ -103,6 +104,7 @@ pub fn worker_loop(
                 &worker,
                 &mut dual_buffer,
                 &mut path_stack,
+                &mut sub_dir_pool,
                 &mut local_arena,
                 &mut local_top_files,
                 &mut local_ext_stats,
@@ -165,9 +167,6 @@ pub fn worker_loop(
             let _ = state.cvar.wait_timeout(guard, Duration::from_millis(1));
             if state.done.load(Ordering::SeqCst) {
                 break;
-            } else if !is_active {
-                state.active_workers.fetch_add(1, Ordering::SeqCst);
-                is_active = true;
             }
         }
     }
@@ -325,7 +324,7 @@ pub fn execute_workers_and_rollup(
     slices.sort_by_key(|s| s.depth);
 
     let mut path_to_master_idx: std::collections::HashMap<PathBuf, u32> =
-        std::collections::HashMap::with_capacity(total_nodes_est.max(16));
+        std::collections::HashMap::with_capacity(slices.len().max(16));
 
     let master_root_idx = master_arena.add_root(0, norm_root_bytes);
     path_to_master_idx.insert(norm_root.clone(), master_root_idx);
@@ -433,16 +432,31 @@ pub fn execute_workers_and_rollup(
             }
         }
 
-        // Register all child paths added in this slice into path_to_master_idx
-        for &m_idx in &all_remappings[worker_idx][(slice.start_idx + 1)..slice.end_idx] {
-            if m_idx != u32::MAX {
-                path_scratch.clear();
-                master_arena.reconstruct_path(m_idx, &mut path_scratch);
-                #[cfg(unix)]
-                let cp = PathBuf::from(std::ffi::OsStr::from_bytes(&path_scratch));
-                #[cfg(windows)]
-                let cp = PathBuf::from(String::from_utf8_lossy(&path_scratch).as_ref());
-                path_to_master_idx.insert(normalize_scan_path(&cp), m_idx);
+        // Register child paths added in this slice into path_to_master_idx in O(1) step per node
+        let slice_len = slice.end_idx - slice.start_idx;
+        if slice_len > 1 {
+            let mut local_node_paths = vec![PathBuf::new(); slice_len];
+            local_node_paths[0] = slice.task_path.clone();
+            for local_offset in 1..slice_len {
+                let local_idx = slice.start_idx + local_offset;
+                let m_idx = all_remappings[worker_idx][local_idx];
+                if m_idx != u32::MAX {
+                    let p_local =
+                        all_results[worker_idx].arena.nodes[local_idx].parent_idx as usize;
+                    if p_local >= slice.start_idx && p_local < slice.end_idx {
+                        let p_offset = p_local - slice.start_idx;
+                        let name_bytes = all_results[worker_idx].arena.name_of(local_idx as u32);
+                        #[cfg(unix)]
+                        let child_path = local_node_paths[p_offset]
+                            .join(std::ffi::OsStr::from_bytes(name_bytes));
+                        #[cfg(windows)]
+                        let child_path = local_node_paths[p_offset]
+                            .join(String::from_utf8_lossy(name_bytes).as_ref());
+                        let norm_child = normalize_scan_path(&child_path);
+                        path_to_master_idx.insert(norm_child, m_idx);
+                        local_node_paths[local_offset] = child_path;
+                    }
+                }
             }
         }
     }
@@ -481,24 +495,47 @@ pub fn execute_workers_and_rollup(
         }
     }
 
-    // Format all_dirs and extract top_dirs
-    let mut all_dirs: Vec<(PathBuf, u64)> = Vec::with_capacity(master_arena.len());
+    // Extract top_dirs using bounded BinaryHeap directly over arena nodes (zero heap allocs during traversal)
+    let mut top_heap: BinaryHeap<Reverse<(u64, u32)>> =
+        BinaryHeap::with_capacity(options.top_limit + 16);
     for (idx, node) in master_arena.nodes.iter().enumerate() {
         if (node.rel_depth as usize) <= options.max_depth {
-            path_scratch.clear();
-            master_arena.reconstruct_path(idx as u32, &mut path_scratch);
-            #[cfg(unix)]
-            let p = PathBuf::from(std::ffi::OsStr::from_bytes(&path_scratch));
-            #[cfg(windows)]
-            let p = PathBuf::from(String::from_utf8_lossy(&path_scratch).as_ref());
-            let norm_p = normalize_scan_path(&p);
-            all_dirs.push((norm_p, node.total_bytes));
+            let sz = node.total_bytes;
+            if options.top_limit > 0 {
+                if top_heap.len() >= options.top_limit {
+                    if let Some(Reverse((min_sz, _))) = top_heap.peek()
+                        && sz <= *min_sz
+                    {
+                        continue;
+                    }
+                    top_heap.pop();
+                }
+                top_heap.push(Reverse((sz, idx as u32)));
+            }
         }
     }
-    all_dirs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    let max_dir_size = all_dirs.first().map(|(_, s)| *s).unwrap_or(1).max(1);
-    let top_dirs: Vec<(PathBuf, u64)> = all_dirs.iter().take(options.top_limit).cloned().collect();
+    let mut sorted_top_indices: Vec<(u64, u32)> =
+        top_heap.into_iter().map(|Reverse(item)| item).collect();
+    sorted_top_indices.sort_by_key(|a| Reverse(a.0));
+
+    let max_dir_size = sorted_top_indices
+        .first()
+        .map(|(s, _)| *s)
+        .unwrap_or(1)
+        .max(1);
+
+    let mut top_dirs: Vec<(PathBuf, u64)> = Vec::with_capacity(sorted_top_indices.len());
+    for (sz, idx) in sorted_top_indices {
+        path_scratch.clear();
+        master_arena.reconstruct_path(idx, &mut path_scratch);
+        #[cfg(unix)]
+        let p = PathBuf::from(std::ffi::OsStr::from_bytes(&path_scratch));
+        #[cfg(windows)]
+        let p = PathBuf::from(String::from_utf8_lossy(&path_scratch).as_ref());
+        let norm_p = normalize_scan_path(&p);
+        top_dirs.push((norm_p, sz));
+    }
 
     // Resolve top files
     let mut files_vec: Vec<(u64, PathBuf)> = Vec::with_capacity(merged_top_heap.len());
@@ -529,6 +566,6 @@ pub fn execute_workers_and_rollup(
         arenas: vec![master_arena],
         root: root.to_path_buf(),
         extension_stats: merged_ext_stats,
-        all_dirs,
+        all_dirs: Vec::new(),
     }
 }

@@ -82,11 +82,16 @@ impl ScanOptions {
             let avail = std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(1);
-            if n > 0 {
+            let mut c = if n > 0 {
                 (n as usize).max(avail)
             } else {
                 avail
+            };
+            #[cfg(target_os = "linux")]
+            if let Some(quota) = crate::sys::get_cgroup_cpu_limit() {
+                c = c.min(quota);
             }
+            c
         };
         #[cfg(not(unix))]
         let cores = std::thread::available_parallelism()
@@ -102,9 +107,9 @@ impl ScanOptions {
         {
             let dev = get_path_dev(path);
             if crate::sys::is_rotational(dev, path) {
-                cores.clamp(4, 8)
+                (cores * 4).clamp(16, 32)
             } else {
-                (cores * 4).clamp(8, 64)
+                (cores * 4).clamp(16, 64)
             }
         }
     }
@@ -156,7 +161,7 @@ pub fn is_excluded_dir(path_bytes: &[u8], name_bytes: &[u8], excludes: &[Vec<u8>
     matcher.is_excluded(path_bytes, name_bytes)
 }
 
-const BATCH_FILE_THRESHOLD: u64 = 8192;
+const BATCH_FILE_THRESHOLD: u64 = 2048;
 
 #[inline(always)]
 pub fn record_file_stat(
