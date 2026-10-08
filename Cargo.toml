@@ -10,6 +10,15 @@ default-members = [
     "crates/dscan-cli",
 ]
 
+[workspace.package]
+version = "0.8.0"
+edition = "2024"
+authors = ["AhooraZen <ahoora935137@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/AhooraZen/dscan"
+homepage = "https://github.com/AhooraZen/dscan"
+readme = "README.md"
+
 [profile.release]
 opt-level = 3
 lto = "fat"

@@ -111,18 +111,18 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "dscan"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "dscan-core",
 ]
 
 [[package]]
 name = "dscan-core"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "dscan-jni"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "dscan-core",
  "jni",

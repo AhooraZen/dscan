@@ -36,11 +36,11 @@ jobs:
       - name: Format Check
         run: cargo fmt --check
 
-      - name: Clippy (Workspace Core + CLI)
-        run: cargo clippy --all-targets -- -D warnings
+      - name: Clippy (Workspace)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   test-linux:
-    name: Test Linux (Core + CLI)
+    name: Test Linux (Workspace)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -59,10 +59,10 @@ jobs:
           cache-all-crates: "true"
 
       - name: Run Tests (with Mold)
-        run: mold -run cargo test -p dscan-core -p dscan
+        run: mold -run cargo test --workspace
 
   test-windows:
-    name: Test Windows (Core + CLI)
+    name: Test Windows (Workspace)
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -77,48 +77,47 @@ jobs:
           key: win-test
           cache-all-crates: "true"
 
-      - name: Run Windows Core + CLI Tests
-        run: cargo test -p dscan-core -p dscan
+      - name: Run Windows Workspace Tests
+        run: cargo test --workspace
 
-  check-gui-linux:
-    name: Check GUI (Linux)
+  build-desktop-compose:
+    name: Build Compose Desktop App
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Linux GPUI System Libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libfontconfig1-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libvulkan-dev mold clang pkg-config
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
-          key: gui-linux-check
-          cache-all-crates: "true"
+          distribution: 'temurin'
+          java-version: '17'
 
-      - name: Check GPUI GUI Crate
-        run: mold -run cargo check -p dscan-gui
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
-  check-gui-windows:
-    name: Check GUI (Windows)
-    runs-on: windows-latest
+      - name: Assemble Desktop App
+        run: |
+          cd android
+          ./gradlew :desktopApp:assemble
+
+  build-android-compose:
+    name: Build Compose Android App
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
-          key: gui-win-check
-          cache-all-crates: "true"
+          distribution: 'temurin'
+          java-version: '17'
 
-      - name: Check Windows GPUI GUI Crate
-        run: cargo check -p dscan-gui
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble Android Debug APK
+        run: |
+          cd android
+          ./gradlew :androidApp:assembleDebug

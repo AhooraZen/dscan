@@ -12,8 +12,8 @@ android {
         applicationId = "com.dscan.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 70
-        versionName = "0.7.0"
+        versionCode = 80
+        versionName = "0.8.0"
 
         ndk {
             abiFilters.addAll(listOf("arm64-v8a", "x86_64", "armeabi-v7a"))
@@ -37,7 +37,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
